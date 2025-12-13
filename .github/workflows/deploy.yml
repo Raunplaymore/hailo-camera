@@ -1,4 +1,4 @@
-name: Deploy Pi Camera
+name: Deploy Hailo Camera
 
 on:
   push:
@@ -63,10 +63,10 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           timeout: 120s
           script: |
-            RELEASES_DIR=~/pi_camera/releases
+            RELEASES_DIR=~/hailo_camera/releases
             TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
             mkdir -p "$TARGET"
-            mkdir -p ~/pi_camera
+            mkdir -p ~/hailo_camera
 
       - name: Upload release bundle
         uses: appleboy/scp-action@v0.1.7
@@ -76,7 +76,7 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           timeout: 120s
           source: "release-${{ env.RELEASE_NAME }}.tar.gz"
-          target: "~/pi_camera/releases/${{ env.RELEASE_NAME }}"
+          target: "~/hailo_camera/releases/${{ env.RELEASE_NAME }}"
 
       - name: Activate release and prune old ones
         uses: appleboy/ssh-action@v1.2.0
@@ -88,8 +88,8 @@ jobs:
           script: |
             export PATH="$HOME/.nvm/versions/node/v20.19.4/bin:$PATH"
 
-            RELEASES_DIR=~/pi_camera/releases
-            CURRENT_LINK=~/pi_camera/current
+            RELEASES_DIR=~/hailo_camera/releases
+            CURRENT_LINK=~/hailo_camera/current
             TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
 
             cd "$TARGET"

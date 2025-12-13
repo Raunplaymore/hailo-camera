@@ -1,0 +1,107 @@
+name: Deploy Pi Camera
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Seoul
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Use Node.js 20.19.4
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.4
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set release name
+        run: echo "RELEASE_NAME=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+
+      - name: Create release bundle
+        run: |
+          tar czf release-${RELEASE_NAME}.tar.gz \
+            server.js \
+            package.json \
+            package-lock.json \
+            README.md \
+            ecosystem.config.cjs \
+            scripts \
+            uploads
+
+      - name: Check Tailscale reachability
+        run: |
+          tailscale status || true
+          ping -c 3 ${{ secrets.PI_HOST }} || true
+          nc -zv ${{ secrets.PI_HOST }} 22 || true
+
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/hailo-ci
+          chmod 600 ~/.ssh/hailo-ci
+          ssh-keyscan -H ${{ secrets.PI_HOST }} >> ~/.ssh/known_hosts || true
+
+      - name: Prepare release directory on Raspberry Pi
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          timeout: 120s
+          script: |
+            RELEASES_DIR=~/pi_camera/releases
+            TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
+            mkdir -p "$TARGET"
+            mkdir -p ~/pi_camera
+
+      - name: Upload release bundle
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          timeout: 120s
+          source: "release-${{ env.RELEASE_NAME }}.tar.gz"
+          target: "~/pi_camera/releases/${{ env.RELEASE_NAME }}"
+
+      - name: Activate release and prune old ones
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PI_HOST }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.PI_SSH_KEY }}
+          timeout: 120s
+          script: |
+            export PATH="$HOME/.nvm/versions/node/v20.19.4/bin:$PATH"
+
+            RELEASES_DIR=~/pi_camera/releases
+            CURRENT_LINK=~/pi_camera/current
+            TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
+
+            cd "$TARGET"
+            tar xzf release-${{ env.RELEASE_NAME }}.tar.gz
+            rm release-${{ env.RELEASE_NAME }}.tar.gz
+
+            NODE_ENV=production npm ci --omit=dev
+
+            ln -sfn "$TARGET" "$CURRENT_LINK"
+
+            cd "$RELEASES_DIR"
+            ls -1dt */ | tail -n +4 | xargs -r rm -rf
+
+            pm2 reload pi-camera || pm2 start "$CURRENT_LINK/ecosystem.config.cjs"
+            pm2 save

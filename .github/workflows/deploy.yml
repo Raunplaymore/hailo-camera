@@ -63,10 +63,10 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           timeout: 120s
           script: |
-            RELEASES_DIR=~/hailo_camera/releases
+            RELEASES_DIR=~/hailo-camera/releases
             TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
             mkdir -p "$TARGET"
-            mkdir -p ~/hailo_camera
+            mkdir -p ~/hailo-camera
 
       - name: Upload release bundle
         uses: appleboy/scp-action@v0.1.7
@@ -76,7 +76,7 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           timeout: 120s
           source: "release-${{ env.RELEASE_NAME }}.tar.gz"
-          target: "~/hailo_camera/releases/${{ env.RELEASE_NAME }}"
+          target: "~/hailo-camera/releases/${{ env.RELEASE_NAME }}"
 
       - name: Activate release and prune old ones
         uses: appleboy/ssh-action@v1.2.0
@@ -88,8 +88,8 @@ jobs:
           script: |
             export PATH="$HOME/.nvm/versions/node/v20.19.4/bin:$PATH"
 
-            RELEASES_DIR=~/hailo_camera/releases
-            CURRENT_LINK=~/hailo_camera/current
+            RELEASES_DIR=~/hailo-camera/releases
+            CURRENT_LINK=~/hailo-camera/current
             TARGET="$RELEASES_DIR/${{ env.RELEASE_NAME }}"
 
             cd "$TARGET"
@@ -103,5 +103,5 @@ jobs:
             cd "$RELEASES_DIR"
             ls -1dt */ | tail -n +4 | xargs -r rm -rf
 
-            pm2 reload pi-camera || pm2 start "$CURRENT_LINK/ecosystem.config.cjs"
+            pm2 reload hailo-camera || pm2 start "$CURRENT_LINK/ecosystem.config.cjs"
             pm2 save

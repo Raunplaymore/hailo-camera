@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'pi-camera',
+      name: 'hailo-camera',
       script: 'server.js',
       cwd: __dirname,
       env: {

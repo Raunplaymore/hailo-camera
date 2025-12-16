@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * Simple smoke test for the camera capture server.
- * Requires the server to be running locally and a connected libcamera-compatible camera.
+ * Requires the server to be running locally and a connected rpicam/libcamera-compatible camera.
  */
 
 const baseUrl = process.env.SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;

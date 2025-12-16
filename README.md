@@ -1,9 +1,9 @@
 # camera-capture-server
 
-libcamera가 설치된 Raspberry Pi용 Node.js/Express 캡처 서버입니다. 캡처 결과를 `/uploads`에 저장하고 REST API를 제공합니다. 인메모리 플래그와 `/tmp/camera.lock` 파일로 동시 요청을 막습니다.
+rpicam(libcamera 파이프라인) 기반 Raspberry Pi용 Node.js/Express 캡처 서버입니다. 캡처 결과를 `/uploads`에 저장하고 REST API를 제공합니다. 인메모리 플래그와 `/tmp/camera.lock` 파일로 동시 요청을 막습니다.
 
 ## 요구사항
-- Raspberry Pi OS + libcamera (`libcamera-still`, `libcamera-vid`, `libcamera-hello`)
+- Raspberry Pi OS + rpicam 앱 (`rpicam-still`, `rpicam-vid`, `rpicam-hello`) — 구 버전 libcamera CLI도 자동 폴백
 - ffmpeg (mp4 리먹스 용)
 - Node.js 18+
 
@@ -19,6 +19,7 @@ npm start        # PORT에서 시작 (기본 3000)
 - `CORS_ALLOW_ALL=true`: 전역 CORS 허용. 또는 `CORS_ORIGIN`에 허용 origin을 콤마로 나열
 - `DEFAULT_WIDTH`, `DEFAULT_HEIGHT`, `DEFAULT_FPS`, `DEFAULT_STILL_DURATION_SEC`, `DEFAULT_VIDEO_DURATION_SEC`: 기본값 재정의
 - `ANALYZE_URL`: 분석 요청 대상 URL (기본 `http://127.0.0.1:PORT/api/analyze`)
+- `CAMERA_STILL_CMDS`, `CAMERA_VIDEO_CMDS`, `CAMERA_HELLO_CMDS`: 사용할 rpicam/libcamera 명령을 콤마로 지정 (기본은 `rpicam-*` → `libcamera-*` 순서)
 
 `/uploads`는 정적 서빙되며, 서버 시작 시 자동으로 생성됩니다.
 
@@ -28,7 +29,7 @@ npm start        # PORT에서 시작 (기본 3000)
 ```json
 { "filename": "optional", "format": "h264|mp4|jpg", "width": 1920, "height": 1080, "fps": 30, "durationSec": 3 }
 ```
-- `format` 기본값은 `jpg`. `mp4`는 `libcamera-vid`로 `.h264` 캡처 후 `ffmpeg -c copy`로 mp4 리먹스.
+- `format` 기본값은 `jpg`. `mp4`는 `rpicam-vid`(또는 폴백 명령)로 `.h264` 캡처 후 `ffmpeg -c copy`로 mp4 리먹스.
 - `filename`은 sanitize 처리되며, 없으면 `YYYYMMDD_HHMMSS_{w}x{h}_{fps}fps_{dur}s.{ext}` 패턴 사용.
 
 성공 응답:
@@ -40,7 +41,7 @@ npm start        # PORT에서 시작 (기본 3000)
 `/capture`와 동일한 바디. 캡처 완료 후 `{ filename, path: "/uploads/<file>" }`를 `ANALYZE_URL`(또는 `http://127.0.0.1:PORT/api/analyze`)로 전달. 성공 시 `{ ok: true, jobId, filename, status: "queued" }` 반환.
 
 ### GET /api/camera/status
-`{ ok: true, cameraDetected, busy, lastCaptureAt?, lastError? }` 반환. 카메라 감지는 `libcamera-hello --list-cameras` (실패 시 `libcamera-still --list-cameras`) 사용.
+`{ ok: true, cameraDetected, busy, lastCaptureAt?, lastError? }` 반환. 카메라 감지는 `rpicam-hello --list-cameras` → `rpicam-still --list-cameras` (필요 시 libcamera CLI로 폴백) 순으로 시도합니다.
 
 ### GET /uploads/:name
 캡처된 파일 정적 서빙.

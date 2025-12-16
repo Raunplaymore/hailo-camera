@@ -26,6 +26,18 @@ const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || '';
+const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
+  'rpicam-still',
+  'libcamera-still',
+]);
+const VIDEO_COMMANDS = buildCommandList(process.env.CAMERA_VIDEO_CMDS || process.env.VID_CMD, [
+  'rpicam-vid',
+  'libcamera-vid',
+]);
+const HELLO_COMMANDS = buildCommandList(process.env.CAMERA_HELLO_CMDS || process.env.HELLO_CMD, [
+  'rpicam-hello',
+  'libcamera-hello',
+]);
 
 let busy = false;
 let lastCaptureAt = null;
@@ -262,7 +274,7 @@ async function tryAcquireLock(expectedMs) {
     pid: process.pid,
     createdAt: new Date().toISOString(),
     expiresAt,
-    note: 'libcamera capture lock',
+    note: 'camera capture lock',
   });
 
   try {
@@ -317,8 +329,7 @@ async function handleCapture(options, timeouts) {
 async function captureStill({ width, height, durationSec, outputPath }, timeoutMs) {
   const timeout = Math.max(500, durationSec * 1000);
   const args = ['-o', outputPath, '--width', String(width), '--height', String(height), '-t', String(timeout), '-n'];
-  logCommand('libcamera-still', args);
-  const { stdout, stderr } = await runCommand('libcamera-still', args, timeoutMs);
+  const { stdout, stderr } = await runCameraCommand(STILL_COMMANDS, args, timeoutMs);
   logOutputs(stdout, stderr);
 }
 
@@ -337,8 +348,7 @@ async function captureVideo({ width, height, durationSec, fps, outputPath }, tim
     outputPath,
     '-n',
   ];
-  logCommand('libcamera-vid', args);
-  const { stdout, stderr } = await runCommand('libcamera-vid', args, timeoutMs);
+  const { stdout, stderr } = await runCameraCommand(VIDEO_COMMANDS, args, timeoutMs);
   logOutputs(stdout, stderr);
 }
 
@@ -411,10 +421,30 @@ function truncate(text, limit = MAX_STDIO_LOG) {
   return text.length > limit ? `${text.slice(0, limit)}... [truncated]` : text;
 }
 
+async function runCameraCommand(commands, args, timeoutMs) {
+  let lastErr = null;
+  for (const command of commands) {
+    try {
+      logCommand(command, args);
+      return await runCommand(command, args, timeoutMs);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        lastErr = err;
+        log(`Command ${command} not found, trying next option...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  const err = lastErr || new Error('No camera command available');
+  err.httpStatus = err.httpStatus || 500;
+  throw err;
+}
+
 async function detectCamera() {
   const checks = [
-    ['libcamera-hello', ['--list-cameras']],
-    ['libcamera-still', ['--list-cameras']],
+    ...HELLO_COMMANDS.map((cmd) => [cmd, ['--list-cameras']]),
+    ...STILL_COMMANDS.map((cmd) => [cmd, ['--list-cameras']]),
   ];
 
   for (const [cmd, args] of checks) {
@@ -434,4 +464,13 @@ function httpError(message, status) {
   const err = new Error(message);
   err.httpStatus = status;
   return err;
+}
+
+function buildCommandList(raw, defaults) {
+  if (!raw) return defaults;
+  const list = String(raw)
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return list.length ? list : defaults;
 }

@@ -1,7 +1,7 @@
 {
   "name": "camera-capture-server",
   "version": "0.1.0",
-  "description": "Node.js libcamera capture server for Raspberry Pi",
+  "description": "Node.js rpicam capture server for Raspberry Pi",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -11,6 +11,7 @@
   },
   "keywords": [
     "raspberry-pi",
+    "rpicam",
     "libcamera",
     "express"
   ],

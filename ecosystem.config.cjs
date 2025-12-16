@@ -6,7 +6,7 @@ module.exports = {
       cwd: __dirname,
       env: {
         NODE_ENV: 'production',
-        PORT: process.env.PORT || 3000,
+        PORT: process.env.PORT || 3001,
         AUTH_TOKEN: process.env.AUTH_TOKEN || '',
         CORS_ALLOW_ALL: process.env.CORS_ALLOW_ALL || '',
         CORS_ORIGIN: process.env.CORS_ORIGIN || '',

@@ -4,7 +4,7 @@
  * Requires the server to be running locally and a connected rpicam/libcamera-compatible camera.
  */
 
-const baseUrl = process.env.SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
+const baseUrl = process.env.SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3001}`;
 const authToken = process.env.SMOKE_TOKEN || process.env.AUTH_TOKEN || '';
 
 async function main() {

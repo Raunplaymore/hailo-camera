@@ -10,11 +10,11 @@ rpicam(libcamera 파이프라인) 기반 Raspberry Pi용 Node.js/Express 캡처 
 ## 설치 및 실행
 ```bash
 npm install
-npm start        # PORT에서 시작 (기본 3000)
+npm start        # PORT에서 시작 (기본 3001)
 ```
 
 ### 환경 변수 옵션
-- `PORT`: HTTP 포트 (기본 3000)
+- `PORT`: HTTP 포트 (기본 3001)
 - `AUTH_TOKEN`: 설정 시 모든 `/api/*` 라우트에 Bearer 토큰 필요
 - `CORS_ALLOW_ALL=true`: 전역 CORS 허용. 또는 `CORS_ORIGIN`에 허용 origin을 콤마로 나열
 - `DEFAULT_WIDTH`, `DEFAULT_HEIGHT`, `DEFAULT_FPS`, `DEFAULT_STILL_DURATION_SEC`, `DEFAULT_VIDEO_DURATION_SEC`: 기본값 재정의
@@ -59,32 +59,32 @@ npm start        # PORT에서 시작 (기본 3000)
 서버 실행 상태와 카메라 하드웨어가 필요합니다.
 ```bash
 npm test                # runs scripts/smoke_test.js
-PORT=3000 node scripts/smoke_test.js
+PORT=3001 node scripts/smoke_test.js
 ```
 인증이 켜져 있으면 `SMOKE_TOKEN` 또는 `AUTH_TOKEN`을 설정하세요.
 
 ## curl 예시
 ```bash
 # Status
-curl -s http://localhost:3000/api/camera/status
+curl -s http://localhost:3001/api/camera/status
 
 # JPG capture (1s)
-curl -X POST http://localhost:3000/api/camera/capture \
+curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1,"width":1280,"height":720}'
 
 # H264 capture
-curl -X POST http://localhost:3000/api/camera/capture \
+curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"h264","durationSec":3,"fps":30}'
 
 # MP4 capture with default name
-curl -X POST http://localhost:3000/api/camera/capture \
+curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"mp4","durationSec":3,"fps":30}'
 
 # Capture then analyze
-curl -X POST http://localhost:3000/api/camera/capture-and-analyze \
+curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1}'
 ```

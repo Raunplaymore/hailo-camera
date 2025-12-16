@@ -7,7 +7,7 @@ const cors = require('cors');
 
 const app = express();
 
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT = parseInt(process.env.PORT, 10) || 3001;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const LOCK_FILE = '/tmp/camera.lock';
 const COMMAND_GRACE_MS = 3000;

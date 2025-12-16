@@ -1,6 +1,6 @@
 # camera-capture-server
 
-rpicam(libcamera 파이프라인) 기반 Raspberry Pi용 Node.js/Express 캡처 서버입니다. 캡처 결과를 `/uploads`에 저장하고 REST API를 제공합니다. 인메모리 플래그와 `/tmp/camera.lock` 파일로 동시 요청을 막습니다.
+rpicam(libcamera 파이프라인) 기반 Raspberry Pi용 Node.js/Express 캡처 서버입니다. 캡처 결과를 기본적으로 `/home/ray/uploads`에 저장하고 REST API를 제공합니다. 인메모리 플래그와 `/tmp/camera.lock` 파일로 동시 요청을 막습니다.
 
 ## 요구사항
 - Raspberry Pi OS + rpicam 앱 (`rpicam-still`, `rpicam-vid`, `rpicam-hello`) — 구 버전 libcamera CLI도 자동 폴백
@@ -20,8 +20,9 @@ npm start        # PORT에서 시작 (기본 3001)
 - `DEFAULT_WIDTH`, `DEFAULT_HEIGHT`, `DEFAULT_FPS`, `DEFAULT_STILL_DURATION_SEC`, `DEFAULT_VIDEO_DURATION_SEC`: 기본값 재정의
 - `ANALYZE_URL`: 분석 요청 대상 URL (기본 `http://127.0.0.1:PORT/api/analyze`)
 - `CAMERA_STILL_CMDS`, `CAMERA_VIDEO_CMDS`, `CAMERA_HELLO_CMDS`: 사용할 rpicam/libcamera 명령을 콤마로 지정 (기본은 `rpicam-*` → `libcamera-*` 순서)
+- `UPLOAD_DIR`: 캡처 파일 저장 절대경로 (기본 `/home/ray/uploads`)
 
-`/uploads`는 정적 서빙되며, 서버 시작 시 자동으로 생성됩니다.
+`/uploads` 라우트는 `UPLOAD_DIR`을 가리키며, 서버 시작 시 해당 디렉터리가 자동 생성됩니다.
 
 ## API
 ### POST /api/camera/capture
@@ -66,24 +67,29 @@ PORT=3001 node scripts/smoke_test.js
 ## curl 예시
 ```bash
 # Status
+# 예상: {"ok":true,"cameraDetected":true/false,"busy":false,...}
 curl -s http://localhost:3001/api/camera/status
 
 # JPG capture (1s)
+# 예상: {"ok":true,"filename":"...jpg","url":"/uploads/....jpg"}
 curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1,"width":1280,"height":720}'
 
 # H264 capture
+# 예상: {"ok":true,"filename":"...h264","url":"/uploads/....h264"}
 curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"h264","durationSec":3,"fps":30}'
 
 # MP4 capture with default name
+# 예상: {"ok":true,"filename":"...mp4","url":"/uploads/....mp4"}
 curl -X POST http://localhost:3001/api/camera/capture \
   -H "Content-Type: application/json" \
   -d '{"format":"mp4","durationSec":3,"fps":30}'
 
 # Capture then analyze
+# 예상: {"ok":true,"jobId":"...","filename":"...jpg","status":"queued","url":"/uploads/...jpg"}
 curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1}'

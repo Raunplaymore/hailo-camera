@@ -42,6 +42,8 @@ const HELLO_COMMANDS = buildCommandList(process.env.CAMERA_HELLO_CMDS || process
 let busy = false;
 let lastCaptureAt = null;
 let lastError = null;
+let streamingActive = false;
+let streamClients = 0;
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -64,7 +66,15 @@ app.use('/api', authMiddleware);
 app.get('/api/camera/status', async (_req, res) => {
   const cameraDetected = await detectCamera();
   const busyState = await isBusy();
-  res.json({ ok: true, cameraDetected, busy: busyState, lastCaptureAt, lastError });
+  res.json({
+    ok: true,
+    cameraDetected,
+    busy: busyState || streamingActive,
+    streaming: streamingActive,
+    streamClients,
+    lastCaptureAt,
+    lastError,
+  });
 });
 
 app.post('/api/camera/capture', async (req, res) => {
@@ -73,6 +83,10 @@ app.post('/api/camera/capture', async (req, res) => {
     options = parseCaptureOptions(req.body || {});
   } catch (err) {
     return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
+  }
+
+  if (streamingActive) {
+    return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
 
   const timeouts = computeTimeouts(options.format, options.durationSec);
@@ -102,6 +116,10 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     options = parseCaptureOptions(req.body || {});
   } catch (err) {
     return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
+  }
+
+  if (streamingActive) {
+    return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
 
   const timeouts = computeTimeouts(options.format, options.durationSec);
@@ -142,6 +160,97 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
   } finally {
     await releaseLock();
   }
+});
+
+app.get('/api/camera/stream.mjpeg', async (req, res) => {
+  if (await isBusy()) {
+    return res.status(409).json({ ok: false, error: 'Camera busy' });
+  }
+  if (streamingActive) {
+    return res.status(409).json({ ok: false, error: 'Stream already active' });
+  }
+
+  const streamOptions = parseStreamOptions(req.query || {});
+  let pipeline;
+  let cleaned = false;
+
+  const cleanup = (reason) => {
+    if (cleaned) return;
+    cleaned = true;
+    streamingActive = false;
+    streamClients = 0;
+    log(`MJPEG stream cleanup (${reason})`);
+    if (pipeline) {
+      if (pipeline.source && pipeline.ffmpeg && pipeline.source.stdout && pipeline.ffmpeg.stdin) {
+        pipeline.source.stdout.unpipe(pipeline.ffmpeg.stdin);
+      }
+      if (pipeline.source && !pipeline.source.killed) {
+        pipeline.source.kill('SIGTERM');
+        setTimeout(() => pipeline.source.kill('SIGKILL'), 1500);
+      }
+      if (pipeline.ffmpeg && !pipeline.ffmpeg.killed) {
+        if (pipeline.ffmpeg.stdout) {
+          pipeline.ffmpeg.stdout.unpipe(res);
+        }
+        if (pipeline.ffmpeg.stdin && !pipeline.ffmpeg.stdin.destroyed) {
+          pipeline.ffmpeg.stdin.destroy();
+        }
+        pipeline.ffmpeg.kill('SIGTERM');
+        setTimeout(() => pipeline.ffmpeg.kill('SIGKILL'), 1500);
+      }
+    }
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  try {
+    pipeline = await startStreamPipeline(streamOptions);
+  } catch (err) {
+    const status = err.httpStatus || 500;
+    return res.status(status).json({ ok: false, error: err.message });
+  }
+
+  streamingActive = true;
+  streamClients = 1;
+
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
+    'Cache-Control': 'no-cache',
+    Connection: 'close',
+    Pragma: 'no-cache',
+  });
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  const handleError = (label) => (err) => {
+    if (err && err.message) {
+      log(`${label} stream error:`, err.message);
+    } else {
+      log(`${label} stream error`);
+    }
+    cleanup(`${label}_error`);
+  };
+
+  pipeline.ffmpeg.stdout.on('data', (chunk) => {
+    if (!res.writableEnded) {
+      res.write(chunk);
+    }
+  });
+  pipeline.ffmpeg.stdout.on('error', handleError('ffmpeg_stdout'));
+
+  const onClose = (label) => (code, signal) => {
+    log(`${label} stream process closed`, code, signal || '');
+    cleanup(`${label}_close`);
+  };
+
+  pipeline.source.on('error', handleError('source'));
+  pipeline.ffmpeg.on('error', handleError('ffmpeg'));
+  pipeline.source.on('close', onClose('source'));
+  pipeline.ffmpeg.on('close', onClose('ffmpeg'));
+
+  req.on('close', () => cleanup('client_disconnect'));
 });
 
 app.use((err, _req, res, _next) => {
@@ -218,6 +327,13 @@ function parsePositiveNumber(value, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return fallback;
   return num;
+}
+
+function parseStreamOptions(query) {
+  const width = parsePositiveNumber(query.width, 640);
+  const height = parsePositiveNumber(query.height, 360);
+  const fps = parsePositiveNumber(query.fps, 15);
+  return { width, height, fps, quality: 5 };
 }
 
 async function ensureUploadsDir() {
@@ -415,6 +531,89 @@ async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {
   logOutputs(stdout, stderr);
 }
 
+async function startStreamPipeline({ width, height, fps, quality }) {
+  const preferred = buildStreamCommandList();
+  let lastErr = null;
+
+  for (const command of preferred) {
+    const args = [
+      '--codec',
+      'yuv420',
+      '--width',
+      String(width),
+      '--height',
+      String(height),
+      '--framerate',
+      String(fps),
+      '-t',
+      '0',
+      '-o',
+      '-',
+      '-n',
+    ];
+
+    let source;
+    try {
+      source = await spawnStreamingProcess(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const ffmpegArgs = [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'rawvideo',
+        '-pix_fmt',
+        'yuv420p',
+        '-s',
+        `${width}x${height}`,
+        '-r',
+        String(fps),
+        '-i',
+        '-',
+        '-f',
+        'mpjpeg',
+        '-q:v',
+        String(quality),
+        '-',
+      ];
+      const ffmpeg = await spawnStreamingProcess('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+      source.stdout.pipe(ffmpeg.stdin);
+
+      source.stderr.on('data', (data) => log('stream source stderr:', truncate(data.toString())));
+      ffmpeg.stderr.on('data', (data) => log('stream ffmpeg stderr:', truncate(data.toString())));
+
+      return { source, ffmpeg };
+    } catch (err) {
+      if (source && !source.killed) {
+        source.kill('SIGTERM');
+        setTimeout(() => source.kill('SIGKILL'), 1500);
+      }
+      lastErr = err;
+      log(`Streaming via ${command} failed:`, err.message);
+      continue;
+    }
+  }
+
+  throw httpError(lastErr?.message || 'Unable to start streaming pipeline', lastErr?.httpStatus || 500);
+}
+
+function spawnStreamingProcess(command, args, options) {
+  return new Promise((resolve, reject) => {
+    logCommand(command, args);
+    const child = spawn(command, args, options);
+    const handleError = (err) => {
+      child.off('spawn', handleSpawn);
+      reject(err);
+    };
+    const handleSpawn = () => {
+      child.off('error', handleError);
+      resolve(child);
+    };
+    child.once('error', handleError);
+    child.once('spawn', handleSpawn);
+  });
+}
+
 async function runCommand(command, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -529,4 +728,22 @@ function buildCommandList(raw, defaults) {
     .map((v) => v.trim())
     .filter(Boolean);
   return list.length ? list : defaults;
+}
+
+function buildStreamCommandList() {
+  const preferred = [];
+  const seen = new Set();
+  for (const cmd of VIDEO_COMMANDS) {
+    if (/rpicam/.test(cmd) && !seen.has(cmd)) {
+      preferred.push(cmd);
+      seen.add(cmd);
+    }
+  }
+  for (const cmd of VIDEO_COMMANDS) {
+    if (!seen.has(cmd)) {
+      preferred.push(cmd);
+      seen.add(cmd);
+    }
+  }
+  return preferred.length ? preferred : ['rpicam-vid'];
 }

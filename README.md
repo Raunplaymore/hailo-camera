@@ -64,11 +64,15 @@ npm start        # PORT에서 시작 (기본 3001)
 
 ### GET /api/camera/status
 
-`{ ok: true, cameraDetected, busy, lastCaptureAt?, lastError? }` 반환. 카메라 감지는 `rpicam-hello --list-cameras` → `rpicam-still --list-cameras` (필요 시 libcamera CLI로 폴백) 순으로 시도합니다.
+`{ ok: true, cameraDetected, busy, streaming, streamClients, lastCaptureAt?, lastError? }` 반환. 카메라 감지는 `rpicam-hello --list-cameras` → `rpicam-still --list-cameras` (필요 시 libcamera CLI로 폴백) 순으로 시도합니다. `busy`는 캡처 또는 스트리밍 중임을 의미하며, `streaming`/`streamClients`로 상세 상태를 확인할 수 있습니다.
 
 ### GET /uploads/:name
 
 캡처된 파일 정적 서빙.
+
+### GET /api/camera/stream.mjpeg
+
+실시간 MJPEG 스트림. 쿼리 파라미터로 `width`, `height`, `fps`를 받을 수 있으며 기본값은 `640x360 @ 15fps`입니다. 내부적으로 `rpicam-vid --codec yuv420 -o - | ffmpeg -f mpjpeg -q:v 5 -` 파이프라인을 실행하고, 응답은 `multipart/x-mixed-replace` 포맷으로 전송됩니다. 동시 스트림은 1개만 허용되며, 클라이언트 연결이 끊기면 프로세스가 자동으로 종료됩니다.
 
 ## 락 & 타임아웃
 
@@ -122,6 +126,9 @@ curl -X POST http://localhost:3001/api/camera/capture \
 curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1}'
+
+# Live MJPEG stream (downloads multipart stream; open in player)
+curl -o stream.mjpeg http://localhost:3001/api/camera/stream.mjpeg
 ```
 
 인증이 켜져 있으면 `-H "Authorization: Bearer $AUTH_TOKEN"` 추가.
@@ -130,6 +137,6 @@ curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
 
 - `400` 잘못된 파라미터
 - `401` 인증 실패 (AUTH_TOKEN 설정 시 필요)
-- `409` 카메라 사용 중 (락 보유)
+- `409` 카메라 사용 중 (캡처 락 또는 스트리밍)
 - `500` 캡처/ffmpeg/분석 실패
 - `504` 명령 타임아웃

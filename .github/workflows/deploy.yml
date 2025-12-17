@@ -104,5 +104,7 @@ jobs:
             ls -1dt */ | tail -n +4 | xargs -r rm -rf
 
             pm2 delete hailo-camera || true
+            CORS_ALLOW_ALL=${{ secrets.CORS_ALLOW_ALL }} \
+            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }} \
             pm2 start "$CURRENT_LINK/ecosystem.config.cjs"
             pm2 save

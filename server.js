@@ -336,6 +336,8 @@ async function captureStill({ width, height, durationSec, outputPath }, timeoutM
 async function captureVideo({ width, height, durationSec, fps, outputPath }, timeoutMs) {
   const duration = Math.max(1, durationSec) * 1000;
   const args = [
+    '--codec',
+    'h264',
     '-t',
     String(duration),
     '--width',
@@ -348,12 +350,28 @@ async function captureVideo({ width, height, durationSec, fps, outputPath }, tim
     outputPath,
     '-n',
   ];
+  args.push('--inline');
   const { stdout, stderr } = await runCameraCommand(VIDEO_COMMANDS, args, timeoutMs);
   logOutputs(stdout, stderr);
 }
 
 async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {
-  const args = ['-y', '-framerate', String(fps), '-i', inputPath, '-c', 'copy', outputPath];
+  const args = [
+    '-y',
+    '-fflags',
+    '+genpts',
+    '-f',
+    'h264',
+    '-framerate',
+    String(fps),
+    '-i',
+    inputPath,
+    '-c',
+    'copy',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ];
   logCommand('ffmpeg', args);
   const { stdout, stderr } = await runCommand('ffmpeg', args, timeoutMs);
   logOutputs(stdout, stderr);

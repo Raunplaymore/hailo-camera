@@ -309,6 +309,16 @@ async function handleCapture(options, timeouts) {
   await ensureUploadsDir();
   const targetPath = path.join(UPLOAD_DIR, options.filename);
 
+  if (options.format === 'mp4') {
+    const directHandled = await captureMp4Direct(
+      { ...options, outputPath: targetPath },
+      timeouts.captureTimeout,
+    );
+    if (directHandled) {
+      return options.filename;
+    }
+  }
+
   if (options.format === 'jpg') {
     await captureStill({ ...options, outputPath: targetPath }, timeouts.captureTimeout);
     return options.filename;
@@ -353,6 +363,34 @@ async function captureVideo({ width, height, durationSec, fps, outputPath }, tim
   args.push('--inline');
   const { stdout, stderr } = await runCameraCommand(VIDEO_COMMANDS, args, timeoutMs);
   logOutputs(stdout, stderr);
+}
+
+async function captureMp4Direct({ width, height, durationSec, fps, outputPath }, timeoutMs) {
+  const rpicamCommands = VIDEO_COMMANDS.filter((cmd) => cmd.includes('rpicam'));
+  if (!rpicamCommands.length) return false;
+  const duration = Math.max(1, durationSec) * 1000;
+  const args = [
+    '--codec',
+    'libav',
+    '--libav-format',
+    'mp4',
+    '--libav-video-codec',
+    process.env.LIBAV_VIDEO_CODEC || 'libx264',
+    '-t',
+    String(duration),
+    '--width',
+    String(width),
+    '--height',
+    String(height),
+    '--framerate',
+    String(fps),
+    '-o',
+    outputPath,
+    '-n',
+  ];
+  const { stdout, stderr } = await runCameraCommand(rpicamCommands, args, timeoutMs);
+  logOutputs(stdout, stderr);
+  return true;
 }
 
 async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {

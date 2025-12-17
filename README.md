@@ -23,6 +23,7 @@ npm start        # PORT에서 시작 (기본 3001)
 - `DEFAULT_WIDTH`, `DEFAULT_HEIGHT`, `DEFAULT_FPS`, `DEFAULT_STILL_DURATION_SEC`, `DEFAULT_VIDEO_DURATION_SEC`: 기본값 재정의
 - `ANALYZE_URL`: 분석 요청 대상 URL (기본 `http://127.0.0.1:PORT/api/analyze`)
 - `CAMERA_STILL_CMDS`, `CAMERA_VIDEO_CMDS`, `CAMERA_HELLO_CMDS`: 사용할 rpicam/libcamera 명령을 콤마로 지정 (기본은 `rpicam-*` → `libcamera-*` 순서)
+- `LIBAV_VIDEO_CODEC`: rpicam-vid `--codec libav` 사용 시 비디오 코덱(기본 `libx264`)
 - `UPLOAD_DIR`: 캡처 파일 저장 절대경로 (기본 `/home/ray/uploads`)
 
 `/uploads` 라우트는 `UPLOAD_DIR`을 가리키며, 서버 시작 시 해당 디렉터리가 자동 생성됩니다.
@@ -44,7 +45,7 @@ npm start        # PORT에서 시작 (기본 3001)
 }
 ```
 
-- `format` 기본값은 `jpg`. `mp4`는 `rpicam-vid`(또는 폴백 명령)로 `.h264` 캡처 후 `ffmpeg -fflags +genpts -f h264 -c copy`로 mp4 리먹스하여 정상 재생 가능한 타임스탬프를 생성합니다.
+- `format` 기본값은 `jpg`. `mp4`는 rpicam-vid가 설치된 경우 `--codec libav --libav-format mp4`를 이용해 직접 mp4를 생성하며, rpicam이 없을 때만 h264 + ffmpeg 리먹스 방식을 폴백으로 사용합니다.
 - `filename`은 sanitize 처리되며, 없으면 `YYYYMMDD_HHMMSS_{w}x{h}_{fps}fps_{dur}s.{ext}` 패턴 사용.
 
 성공 응답:

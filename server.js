@@ -250,7 +250,14 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
   pipeline.source.on('close', onClose('source'));
   pipeline.ffmpeg.on('close', onClose('ffmpeg'));
 
-  req.on('close', () => cleanup('client_disconnect'));
+  const onClientClose = () => cleanup('client_disconnect');
+  req.on('close', onClientClose);
+  res.on('close', () => cleanup('response_close'));
+  res.on('finish', () => cleanup('response_finish'));
+  res.on('error', (err) => {
+    log('stream response error:', err.message);
+    cleanup('response_error');
+  });
 });
 
 app.use((err, _req, res, _next) => {

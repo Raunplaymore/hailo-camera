@@ -30,18 +30,6 @@ npm start        # PORT에서 시작 (기본 3001)
 
 `/uploads` 라우트는 `UPLOAD_DIR`을 가리키며, 서버 시작 시 해당 디렉터리가 자동 생성됩니다.
 
-### 환경 세트 전환
-
-```bash
-# Raspberry Pi (raspberrypi.local API)
-npm run env:pi
-
-# 로컬 개발 머신 (100.92.70.114 API)
-npm run env:local
-```
-
-위 명령을 실행하면 `.env.pi` 또는 `.env.local`의 내용이 `.env`로 복사되며, 두 주소(`VITE_API_BASE_LOCAL`, `VITE_API_BASE_PI`)도 함께 정의됩니다.
-
 ## API
 
 ### POST /api/camera/capture

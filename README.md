@@ -25,6 +25,7 @@ npm start        # PORT에서 시작 (기본 3001)
 - `CAMERA_STILL_CMDS`, `CAMERA_VIDEO_CMDS`, `CAMERA_HELLO_CMDS`: 사용할 rpicam/libcamera 명령을 콤마로 지정 (기본은 `rpicam-*` → `libcamera-*` 순서)
 - `LIBAV_VIDEO_CODEC`: rpicam-vid `--codec libav` 사용 시 비디오 코덱(기본 `libx264`)
 - `UPLOAD_DIR`: 캡처 파일 저장 절대경로 (기본 `/home/ray/uploads`)
+- `STREAM_TOKEN`: `/api/camera/stream.mjpeg` 접근에 필요한 토큰. 설정 시 `?token=` 또는 `X-Stream-Token` 헤더와 일치해야 함
 
 `/uploads` 라우트는 `UPLOAD_DIR`을 가리키며, 서버 시작 시 해당 디렉터리가 자동 생성됩니다.
 
@@ -46,9 +47,11 @@ npm start        # PORT에서 시작 (기본 3001)
 ```
 
 - `format` 기본값은 `jpg`. `mp4`는 rpicam-vid가 설치된 경우 `--codec libav --libav-format mp4`를 이용해 직접 mp4를 생성하며, rpicam이 없을 때만 h264 + ffmpeg 리먹스 방식을 폴백으로 사용합니다.
-- `filename`은 sanitize 처리되며, 없으면 `YYYYMMDD_HHMMSS_{w}x{h}_{fps}fps_{dur}s.{ext}` 패턴 사용.
+- `filename`은 sanitize 처리되며, 없으면 `ray_golf_YYYYMMDD_HHMMSS_mmm_swing.<ext>` 패턴으로 생성됩니다.
 
 성공 응답:
+
+> NOTE: `mp4` 녹화는 `/home/ray/uploads/<filename>.mp4.part`로 먼저 기록한 뒤 완료 시 `.mp4`로 atomic rename 합니다. `.part`는 미완성 파일이므로 백엔드에서는 `.mp4`만 사용하세요.
 
 ```json
 {
@@ -60,7 +63,7 @@ npm start        # PORT에서 시작 (기본 3001)
 
 ### POST /api/camera/capture-and-analyze
 
-`/capture`와 동일한 바디. 캡처 완료 후 `{ filename, path: "/uploads/<file>" }`를 `ANALYZE_URL`(또는 `http://127.0.0.1:PORT/api/analyze`)로 전달. 성공 시 `{ ok: true, jobId, filename, status: "queued" }` 반환.
+`/capture`와 동일한 바디. 캡처 완료 후 `{ filename, path: "/uploads/<file>" }`를 `ANALYZE_URL`(또는 `http://127.0.0.1:PORT/api/analyze`)로 전달. 성공 시 `{ ok: true, jobId, filename, status: "queued" }` 반환. 녹화는 먼저 `.mp4.part`로 저장한 뒤 완료 시 `.mp4`로 rename되므로, 백엔드는 `.mp4` 파일만 처리하면 됩니다.
 
 ### GET /api/camera/status
 
@@ -72,7 +75,11 @@ npm start        # PORT에서 시작 (기본 3001)
 
 ### GET /api/camera/stream.mjpeg
 
-실시간 MJPEG 스트림. 쿼리 파라미터로 `width`, `height`, `fps`를 받을 수 있으며 기본값은 `640x360 @ 15fps`입니다. 내부적으로 `rpicam-vid --codec yuv420 -o - | ffmpeg -f mpjpeg -q:v 5 -` 파이프라인을 실행하고, 응답은 `multipart/x-mixed-replace` 포맷으로 전송됩니다. 동시 스트림은 1개만 허용되며, 클라이언트 연결이 끊기면 프로세스가 자동으로 종료됩니다.
+실시간 MJPEG 스트림. 쿼리 파라미터로 `width`, `height`, `fps`를 받을 수 있으며 기본값은 `640x360 @ 15fps`입니다. 내부적으로 `rpicam-vid --codec yuv420 -o - | ffmpeg -f mpjpeg -q:v 5 -` 파이프라인을 실행하고, 응답은 `multipart/x-mixed-replace` 포맷으로 전송됩니다. 동시 스트림은 1개만 허용되며, `STREAM_TOKEN`이 설정되어 있으면 `?token=<TOKEN>`(또는 `X-Stream-Token` 헤더)로 전달해야 합니다. 클라이언트 종료 시 상태가 즉시 반영되고, 필요 시 `POST /api/camera/stream/stop`으로 관리자 강제 종료가 가능합니다.
+
+### POST /api/camera/stream/stop
+
+관리자용 스트림 강제 종료. 활성 스트림이 있다면 정리 후 `{ ok:true, stopped:true }`, 없으면 `{ ok:true, stopped:false }`를 반환합니다.
 
 ## 락 & 타임아웃
 
@@ -127,8 +134,11 @@ curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
   -H "Content-Type: application/json" \
   -d '{"format":"jpg","durationSec":1}'
 
-# Live MJPEG stream (downloads multipart stream; open in player)
-curl -o stream.mjpeg http://localhost:3001/api/camera/stream.mjpeg
+# Live MJPEG stream (token required when `STREAM_TOKEN` set)
+curl -o stream.mjpeg "http://localhost:3001/api/camera/stream.mjpeg?token=$STREAM_TOKEN"
+
+# Force stop stream
+curl -X POST http://localhost:3001/api/camera/stream/stop
 ```
 
 인증이 켜져 있으면 `-H "Authorization: Bearer $AUTH_TOKEN"` 추가.

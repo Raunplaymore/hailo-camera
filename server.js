@@ -26,6 +26,7 @@ const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || '';
+const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
   'libcamera-still',
@@ -44,6 +45,8 @@ let lastCaptureAt = null;
 let lastError = null;
 let streamingActive = false;
 let streamClients = 0;
+let activeStreamCleanup = null;
+let lastStreamStateChange = null;
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -72,6 +75,7 @@ app.get('/api/camera/status', async (_req, res) => {
     busy: busyState || streamingActive,
     streaming: streamingActive,
     streamClients,
+    lastStreamAt: lastStreamStateChange,
     lastCaptureAt,
     lastError,
   });
@@ -163,6 +167,12 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
 });
 
 app.get('/api/camera/stream.mjpeg', async (req, res) => {
+  if (STREAM_TOKEN) {
+    const token = req.query.token || req.headers['x-stream-token'];
+    if (!token || token !== STREAM_TOKEN) {
+      return res.status(401).json({ ok: false, error: 'Invalid stream token' });
+    }
+  }
   if (await isBusy()) {
     return res.status(409).json({ ok: false, error: 'Camera busy' });
   }
@@ -177,8 +187,10 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
   const cleanup = (reason) => {
     if (cleaned) return;
     cleaned = true;
-    streamingActive = false;
-    streamClients = 0;
+    setStreamingState(false);
+    if (activeStreamCleanup === cleanup) {
+      activeStreamCleanup = null;
+    }
     log(`MJPEG stream cleanup (${reason})`);
     if (pipeline) {
       if (pipeline.source && pipeline.ffmpeg && pipeline.source.stdout && pipeline.ffmpeg.stdin) {
@@ -211,8 +223,8 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     return res.status(status).json({ ok: false, error: err.message });
   }
 
-  streamingActive = true;
-  streamClients = 1;
+  setStreamingState(true, 1);
+  activeStreamCleanup = cleanup;
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
@@ -258,6 +270,14 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     log('stream response error:', err.message);
     cleanup('response_error');
   });
+});
+
+app.post('/api/camera/stream/stop', (_req, res) => {
+  if (activeStreamCleanup) {
+    activeStreamCleanup('manual_stop');
+    return res.json({ ok: true, stopped: true });
+  }
+  res.json({ ok: true, stopped: false });
 });
 
 app.use((err, _req, res, _next) => {
@@ -322,11 +342,12 @@ function sanitizeFilename(name) {
   return name.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-function buildDefaultFilename({ format, width, height, fps, durationSec }) {
+function buildDefaultFilename({ format }) {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `${ts}_${width}x${height}_${fps}fps_${durationSec}s.${format}`;
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${ms}`;
+  return `ray_golf_${ts}_swing.${format}`;
 }
 
 function parsePositiveNumber(value, fallback) {
@@ -341,6 +362,13 @@ function parseStreamOptions(query) {
   const height = parsePositiveNumber(query.height, 360);
   const fps = parsePositiveNumber(query.fps, 15);
   return { width, height, fps, quality: 5 };
+}
+
+function setStreamingState(active, clients = 0) {
+  streamingActive = Boolean(active);
+  streamClients = streamingActive ? Math.max(1, Number(clients) || 1) : 0;
+  lastStreamStateChange = new Date().toISOString();
+  log(`Streaming state -> active=${streamingActive} clients=${streamClients}`);
 }
 
 async function ensureUploadsDir() {
@@ -430,33 +458,41 @@ function computeTimeouts(format, durationSec) {
 
 async function handleCapture(options, timeouts) {
   await ensureUploadsDir();
-  const targetPath = path.join(UPLOAD_DIR, options.filename);
+  const finalPath = path.join(UPLOAD_DIR, options.filename);
+  const tempPath = `${finalPath}.part`;
 
   if (options.format === 'mp4') {
     const directHandled = await captureMp4Direct(
-      { ...options, outputPath: targetPath },
+      { ...options, outputPath: tempPath },
       timeouts.captureTimeout,
     );
     if (directHandled) {
+      await finalizeTempFile(tempPath, finalPath);
       return options.filename;
     }
   }
 
   if (options.format === 'jpg') {
-    await captureStill({ ...options, outputPath: targetPath }, timeouts.captureTimeout);
+    await captureStill({ ...options, outputPath: finalPath }, timeouts.captureTimeout);
     return options.filename;
   }
 
   if (options.format === 'h264') {
-    await captureVideo({ ...options, outputPath: targetPath }, timeouts.captureTimeout);
+    await captureVideo({ ...options, outputPath: finalPath }, timeouts.captureTimeout);
     return options.filename;
   }
 
-  const tempH264 = targetPath.replace(/\.mp4$/, '.h264');
+  const tempH264 = tempPath.replace(/\.mp4\.part$/, '.h264');
   await captureVideo({ ...options, format: 'h264', outputPath: tempH264 }, timeouts.captureTimeout);
-  await remuxToMp4(tempH264, targetPath, options.fps, timeouts.convertTimeout);
+  await remuxToMp4(tempH264, tempPath, options.fps, timeouts.convertTimeout);
+  await finalizeTempFile(tempPath, finalPath);
   await fsp.unlink(tempH264).catch(() => {});
   return options.filename;
+}
+
+async function finalizeTempFile(tempPath, finalPath) {
+  if (tempPath === finalPath) return;
+  await fsp.rename(tempPath, finalPath);
 }
 
 async function captureStill({ width, height, durationSec, outputPath }, timeoutMs) {

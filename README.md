@@ -26,8 +26,21 @@ npm start        # PORT에서 시작 (기본 3001)
 - `LIBAV_VIDEO_CODEC`: rpicam-vid `--codec libav` 사용 시 비디오 코덱(기본 `libx264`)
 - `UPLOAD_DIR`: 캡처 파일 저장 절대경로 (기본 `/home/ray/uploads`)
 - `STREAM_TOKEN`: `/api/camera/stream.mjpeg` 접근에 필요한 토큰. 설정 시 `?token=` 또는 `X-Stream-Token` 헤더와 일치해야 함
+- `VITE_API_BASE_LOCAL`, `VITE_API_BASE_PI`: 프런트엔드에서 사용할 API 주소를 저장. 상황에 맞게 `VITE_API_BASE`에 복사해 사용
 
 `/uploads` 라우트는 `UPLOAD_DIR`을 가리키며, 서버 시작 시 해당 디렉터리가 자동 생성됩니다.
+
+### 환경 세트 전환
+
+```bash
+# Raspberry Pi (raspberrypi.local API)
+npm run env:pi
+
+# 로컬 개발 머신 (100.92.70.114 API)
+npm run env:local
+```
+
+위 명령을 실행하면 `.env.pi` 또는 `.env.local`의 내용이 `.env`로 복사되며, 두 주소(`VITE_API_BASE_LOCAL`, `VITE_API_BASE_PI`)도 함께 정의됩니다.
 
 ## API
 

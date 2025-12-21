@@ -11,7 +11,7 @@ let tsNodeRegistered = false;
 try {
   require('ts-node').register({ transpileOnly: true, compilerOptions: { module: 'commonjs' } });
   tsNodeRegistered = true;
-  ({ AutoRecordManager, RecorderController } = require('./src/auto'));
+  ({ AutoRecordManager, RecorderController } = require('./src/auto/index.ts'));
 } catch (err) {
   console.warn('ts-node/register unavailable - auto record disabled', err?.message || err);
 }

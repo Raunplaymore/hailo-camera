@@ -4,6 +4,17 @@ const path = require('path');
 const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
+let AutoRecordManager;
+let RecorderController;
+
+let tsNodeRegistered = false;
+try {
+  require('ts-node').register({ transpileOnly: true, compilerOptions: { module: 'commonjs' } });
+  tsNodeRegistered = true;
+  ({ AutoRecordManager, RecorderController } = require('./src/auto'));
+} catch (err) {
+  console.warn('ts-node/register unavailable - auto record disabled', err?.message || err);
+}
 
 const app = express();
 
@@ -47,6 +58,34 @@ let streamingActive = false;
 let streamClients = 0;
 let activeStreamCleanup = null;
 let lastStreamStateChange = null;
+let autoRecordManager = null;
+let autoRecordInitError = null;
+
+if (tsNodeRegistered && AutoRecordManager && RecorderController) {
+  try {
+    autoRecordManager = new AutoRecordManager({
+      recorder: new RecorderController({
+        uploadDir: UPLOAD_DIR,
+        width: DEFAULTS.width,
+        height: DEFAULTS.height,
+        fps: DEFAULTS.fps,
+        videoCommands: VIDEO_COMMANDS,
+        libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
+        acquireLock: tryAcquireLock,
+        releaseLock,
+        ensureUploadsDir,
+        buildFilename: () => buildDefaultFilename({ format: 'mp4' }),
+        logger: (...args) => log(...args),
+      }),
+      logger: (...args) => log(...args),
+    });
+  } catch (err) {
+    autoRecordInitError = err;
+    console.warn('Auto record init failed', err?.message || err);
+  }
+} else {
+  autoRecordInitError = new Error('ts-node/register unavailable');
+}
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -79,6 +118,40 @@ app.get('/api/camera/status', async (_req, res) => {
     lastCaptureAt,
     lastError,
   });
+});
+
+app.get('/api/camera/auto-record/status', (_req, res) => {
+  res.json({ ok: true, status: getAutoRecordStatus() });
+});
+
+app.post('/api/camera/auto-record/start', async (req, res) => {
+  const manager = resolveAutoRecordManager(res);
+  if (!manager) return;
+  if (streamingActive) {
+    return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
+  }
+  if (await isBusy()) {
+    return res.status(409).json({ ok: false, error: 'Camera busy' });
+  }
+  try {
+    const status = await manager.start();
+    res.json({ ok: true, status });
+  } catch (err) {
+    const statusCode = err.status || err.httpStatus || 500;
+    res.status(statusCode).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/camera/auto-record/stop', async (_req, res) => {
+  const manager = resolveAutoRecordManager(res);
+  if (!manager) return;
+  try {
+    const status = await manager.stop('user');
+    res.json({ ok: true, status });
+  } catch (err) {
+    const statusCode = err.status || err.httpStatus || 500;
+    res.status(statusCode).json({ ok: false, error: err.message });
+  }
 });
 
 app.post('/api/camera/capture', async (req, res) => {
@@ -355,6 +428,28 @@ function buildDefaultFilename({ format }) {
   const ms = String(now.getMilliseconds()).padStart(3, '0');
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${ms}`;
   return `ray_golf_${ts}_swing.${format}`;
+}
+
+function getAutoRecordStatus() {
+  if (autoRecordManager) {
+    return autoRecordManager.getStatus();
+  }
+  return {
+    enabled: false,
+    state: 'idle',
+    startedAt: null,
+    recordingFilename: null,
+    lastError: autoRecordInitError ? autoRecordInitError.message : 'auto record disabled',
+  };
+}
+
+function resolveAutoRecordManager(res) {
+  if (!autoRecordManager) {
+    const reason = autoRecordInitError ? autoRecordInitError.message : 'Auto record unavailable';
+    res.status(503).json({ ok: false, error: reason });
+    return null;
+  }
+  return autoRecordManager;
 }
 
 function parsePositiveNumber(value, fallback) {

@@ -121,7 +121,16 @@ app.get('/api/camera/status', async (_req, res) => {
 });
 
 app.get('/api/camera/auto-record/status', (_req, res) => {
-  res.json({ ok: true, status: getAutoRecordStatus() });
+  try {
+    res.json({ ok: true, status: getAutoRecordStatus() });
+  } catch (err) {
+    log('Auto record status error', err.message || err);
+    res.status(200).json({
+      ok: false,
+      error: err.message || 'Auto record status error',
+      status: getFallbackStatus(),
+    });
+  }
 });
 
 app.post('/api/camera/auto-record/start', async (req, res) => {
@@ -137,8 +146,12 @@ app.post('/api/camera/auto-record/start', async (req, res) => {
     const status = await manager.start();
     res.json({ ok: true, status });
   } catch (err) {
-    const statusCode = err.status || err.httpStatus || 500;
-    res.status(statusCode).json({ ok: false, error: err.message });
+    const statusCode = err.status === 409 ? 409 : 200;
+    res.status(statusCode).json({
+      ok: false,
+      error: err.message || 'Failed to start auto record',
+      status: safeManagerStatus(),
+    });
   }
 });
 
@@ -149,8 +162,12 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
     const status = await manager.stop('user');
     res.json({ ok: true, status });
   } catch (err) {
-    const statusCode = err.status || err.httpStatus || 500;
-    res.status(statusCode).json({ ok: false, error: err.message });
+    const statusCode = err.status === 409 ? 409 : 200;
+    res.status(statusCode).json({
+      ok: false,
+      error: err.message || 'Failed to stop auto record',
+      status: safeManagerStatus(),
+    });
   }
 });
 
@@ -450,6 +467,24 @@ function resolveAutoRecordManager(res) {
     return null;
   }
   return autoRecordManager;
+}
+
+function getFallbackStatus() {
+  return {
+    enabled: false,
+    state: 'failed',
+    startedAt: null,
+    recordingFilename: null,
+    lastError: 'Auto record unavailable',
+  };
+}
+
+function safeManagerStatus() {
+  try {
+    return autoRecordManager ? autoRecordManager.getStatus() : getFallbackStatus();
+  } catch (err) {
+    return getFallbackStatus();
+  }
 }
 
 function parsePositiveNumber(value, fallback) {

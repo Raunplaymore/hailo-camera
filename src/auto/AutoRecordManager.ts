@@ -45,6 +45,7 @@ export class AutoRecordManager {
     this.clearTimers();
     this.lastError = null;
     this.startedAt = new Date().toISOString();
+    this.recordingFilename = null;
     this.transitionTo('arming');
     this.schedule(() => this.enterAddressLocked(), this.config.demoArmingMs);
     return this.getStatus();
@@ -56,9 +57,7 @@ export class AutoRecordManager {
     if (this.state === 'recording' || this.state === 'finishLocked' || this.state === 'stopping') {
       await this.safeStopRecorder().catch((err) => this.fail(err as Error));
     }
-    this.transitionTo('idle');
-    this.startedAt = null;
-    this.recordingFilename = null;
+    this.resetSession();
     return this.getStatus();
   }
 
@@ -67,8 +66,8 @@ export class AutoRecordManager {
       enabled: this.isActive(),
       state: this.state,
       startedAt: this.startedAt,
-      recordingFilename: this.recordingFilename,
-      lastError: this.lastError,
+      recordingFilename: this.recordingFilename || null,
+      lastError: this.lastError || null,
     };
   }
 
@@ -104,9 +103,7 @@ export class AutoRecordManager {
     if (this.state !== 'finishLocked' && this.state !== 'recording') return;
     this.transitionTo('stopping');
     await this.safeStopRecorder().catch((err) => this.fail(err as Error));
-    this.transitionTo('idle');
-    this.startedAt = null;
-    this.recordingFilename = null;
+    this.resetSession();
   }
 
   private async safeStopRecorder() {
@@ -123,6 +120,7 @@ export class AutoRecordManager {
   private fail(err: Error) {
     this.clearTimers();
     this.lastError = err.message;
+    this.resetSession(false);
     this.transitionTo('failed');
     this.log('AutoRecord failed', err.message);
   }
@@ -135,6 +133,14 @@ export class AutoRecordManager {
   private clearTimers() {
     this.timers.forEach((t) => clearTimeout(t));
     this.timers = [];
+  }
+
+  private resetSession(resetState = true) {
+    if (resetState) {
+      this.transitionTo('idle');
+    }
+    this.startedAt = null;
+    this.recordingFilename = null;
   }
 
   private log(...args: unknown[]) {

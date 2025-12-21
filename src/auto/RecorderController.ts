@@ -88,8 +88,9 @@ export class RecorderController implements RecorderAdapter {
       child.once('close', onClose);
       child.once('error', (err) => reject(err));
     });
+    const { filename } = this.currentFile;
     await this.finalizeFile();
-    return { filename: this.currentFile.filename };
+    return { filename };
   }
 
   private async finalizeFile() {

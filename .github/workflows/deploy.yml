@@ -35,6 +35,8 @@ jobs:
         run: |
           tar czf release-${RELEASE_NAME}.tar.gz \
             server.js \
+            src \
+            tsconfig.json \
             package.json \
             package-lock.json \
             README.md \

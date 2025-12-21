@@ -25,7 +25,7 @@ const DEFAULTS = {
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
-const ANALYZE_URL = process.env.ANALYZE_URL || '';
+const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
@@ -138,13 +138,20 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     lastCaptureAt = new Date().toISOString();
     lastError = null;
 
-    const analyzeTarget = ANALYZE_URL || `http://127.0.0.1:${PORT}/api/analyze`;
+    const analyzeTarget = ANALYZE_URL;
     let jobId = null;
     try {
+      const analyzePayload = {
+        filename: options.filename,
+        force: Boolean(req.body?.force),
+      };
       const analyzeResp = await fetch(analyzeTarget, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
-        body: JSON.stringify({ filename, path: `/uploads/${filename}` }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
+        },
+        body: JSON.stringify(analyzePayload),
       });
       const data = await analyzeResp.json().catch(() => ({}));
       if (!analyzeResp.ok) {

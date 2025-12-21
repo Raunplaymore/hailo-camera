@@ -21,7 +21,7 @@ npm start        # PORT에서 시작 (기본 3001)
 - `AUTH_TOKEN`: 설정 시 모든 `/api/*` 라우트에 Bearer 토큰 필요
 - `CORS_ALLOW_ALL=true`: 전역 CORS 허용. 또는 `CORS_ORIGIN`에 허용 origin을 콤마로 나열
 - `DEFAULT_WIDTH`, `DEFAULT_HEIGHT`, `DEFAULT_FPS`, `DEFAULT_STILL_DURATION_SEC`, `DEFAULT_VIDEO_DURATION_SEC`: 기본값 재정의
-- `ANALYZE_URL`: 분석 요청 대상 URL (기본 `http://127.0.0.1:PORT/api/analyze`)
+- `ANALYZE_URL`: 분석 요청 대상 URL (기본 `http://127.0.0.1:3000/api/analyze/from-file`)
 - `CAMERA_STILL_CMDS`, `CAMERA_VIDEO_CMDS`, `CAMERA_HELLO_CMDS`: 사용할 rpicam/libcamera 명령을 콤마로 지정 (기본은 `rpicam-*` → `libcamera-*` 순서)
 - `LIBAV_VIDEO_CODEC`: rpicam-vid `--codec libav` 사용 시 비디오 코덱(기본 `libx264`)
 - `UPLOAD_DIR`: 캡처 파일 저장 절대경로 (기본 `/home/ray/uploads`)
@@ -64,7 +64,7 @@ npm start        # PORT에서 시작 (기본 3001)
 
 ### POST /api/camera/capture-and-analyze
 
-`/capture`와 동일한 바디. 캡처 완료 후 `{ filename, path: "/uploads/<file>" }`를 `ANALYZE_URL`(또는 `http://127.0.0.1:PORT/api/analyze`)로 전달. 성공 시 `{ ok: true, jobId, filename, status: "queued" }` 반환. 녹화는 먼저 `.mp4.part`로 저장한 뒤 완료 시 `.mp4`로 rename되므로, 백엔드는 `.mp4` 파일만 처리하면 됩니다.
+`/capture`와 동일한 바디. 캡처 완료 후 `{ filename }`(필요 시 `force` 플래그)만 `ANALYZE_URL`(기본 `http://127.0.0.1:3000/api/analyze/from-file`)로 전달해 기존 `.mp4` 분석을 트리거합니다. 성공 시 `{ ok: true, jobId, filename, status: "queued" }` 반환. 녹화는 먼저 `.mp4.part`로 저장한 뒤 완료 시 `.mp4`로 rename되므로, 백엔드는 `.mp4` 파일만 처리하면 됩니다.
 
 ### GET /api/camera/status
 

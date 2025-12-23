@@ -137,6 +137,10 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - rpicam-vid는 `SIGINT`로 종료해 mp4를 finalize 합니다.
 - gst-launch는 `-e` 옵션으로 EOS를 보장합니다.
 
+`GET /api/session/list?limit=50&offset=0`
+
+- 최근 세션 목록을 반환합니다.
+
 `GET /api/session/:jobId/status`
 
 `GET /api/session/:jobId/live?tailFrames=30`
@@ -227,6 +231,9 @@ curl -s http://localhost:3001/api/session/<jobId>/status
 
 # 세션 라이브(최근 탐지)
 curl -s "http://localhost:3001/api/session/<jobId>/live?tailFrames=30"
+
+# 세션 목록
+curl -s "http://localhost:3001/api/session/list?limit=20"
 
 # 세션 메타(정규화)
 curl -s http://localhost:3001/api/session/<jobId>/meta

@@ -262,6 +262,18 @@ app.post('/api/session/:jobId/stop', async (req, res) => {
   }
 });
 
+app.get('/api/session/list', async (req, res) => {
+  const limit = clamp(parseNonNegativeNumber(req.query.limit, 50), 1, 200);
+  const offset = clamp(parseNonNegativeNumber(req.query.offset, 0), 0, 1000);
+
+  try {
+    const sessions = await listSessions({ limit, offset });
+    res.json({ ok: true, sessions });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/session/:jobId/status', (req, res) => {
   const jobId = req.params.jobId;
   const status = sessionManager.getStatus(jobId);
@@ -621,6 +633,41 @@ function buildJobId() {
   )}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad(now.getMilliseconds(), 3)}`;
   const suffix = Math.random().toString(36).slice(2, 8);
   return `session_${ts}_${suffix}`;
+}
+
+async function listSessions({ limit, offset }) {
+  const entries = await fsp.readdir(SESSION_STATE_DIR, { withFileTypes: true });
+  const items = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.session.json')) continue;
+    const statePath = path.join(SESSION_STATE_DIR, entry.name);
+    try {
+      const raw = await fsp.readFile(statePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const jobId = parsed.jobId || deriveJobIdFromStateFile(entry.name);
+      const videoFile = parsed.videoFile || null;
+      items.push({
+        jobId,
+        status: parsed.status || 'unknown',
+        startedAt: parsed.startedAt || null,
+        stoppedAt: parsed.stoppedAt || null,
+        errorMessage: parsed.errorMessage || null,
+        videoFile,
+        videoUrl: videoFile ? `/uploads/${videoFile}` : null,
+        metaPath: parsed.metaPath || null,
+      });
+    } catch (err) {
+      log('Session list parse error', entry.name, err.message);
+    }
+  }
+
+  items.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  return items.slice(offset, offset + limit);
+}
+
+function deriveJobIdFromStateFile(name) {
+  return name.replace(/\.session\.json$/, '');
 }
 
 function parseCaptureOptions(body) {

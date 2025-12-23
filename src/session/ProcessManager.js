@@ -17,14 +17,16 @@ class ProcessManager {
     this.metaDir = options.metaDir || '/tmp';
     this.stateDir = options.stateDir || '/tmp';
     this.lockFile = options.lockFile || '/tmp/session.lock';
-    this.rpicamCmd = options.rpicamCmd || 'rpicam-vid';
     this.gstLaunchCmd = options.gstLaunchCmd || 'gst-launch-1.0';
     this.libavCodec = options.libavCodec || 'libx264';
     this.logger = options.logger || (() => {});
     this.buildGstArgs = options.buildGstArgs;
+    this.buildRecordArgs = options.buildRecordArgs;
     this.ensureUploadsDir = options.ensureUploadsDir || this.defaultEnsureUploadsDir.bind(this);
     this.onSessionFinished = options.onSessionFinished || null;
     this.defaultModelOptions = options.defaultModelOptions || {};
+    this.pipeline = options.pipeline || null;
+    this.socketPath = options.socketPath || '/tmp/hailo_camera.shm';
     this.currentSession = null;
     this.signalHandlersRegistered = false;
   }
@@ -60,38 +62,10 @@ class ProcessManager {
 
     const videoFile = `${jobId}.mp4`;
     const videoPath = path.join(this.uploadDir, videoFile);
+    const videoPartPath = `${videoPath}.part`;
     const metaPath = path.join(this.metaDir, `${jobId}.meta.json`);
     const metaRawPath = `${metaPath}.raw`;
     const statePath = path.join(this.stateDir, `${jobId}.session.json`);
-
-    const rpicamArgs = [
-      '--codec',
-      'libav',
-      '--libav-format',
-      'mp4',
-      '--libav-video-codec',
-      this.libavCodec,
-      '-t',
-      String(durationSec > 0 ? durationSec * 1000 : 0),
-      '--width',
-      String(width),
-      '--height',
-      String(height),
-      '--framerate',
-      String(fps),
-      '-o',
-      videoPath,
-      '-n',
-    ];
-
-    const gstArgs = this.buildGstArgs({
-      width,
-      height,
-      fps,
-      metaPath: metaRawPath,
-      model: options.model,
-      modelOptions: { ...this.defaultModelOptions, ...(options.modelOptions || {}) },
-    });
 
     const session = {
       jobId,
@@ -101,11 +75,12 @@ class ProcessManager {
       errorMessage: null,
       videoFile,
       videoPath,
+      videoPartPath,
       metaPath,
       metaRawPath,
       statePath,
-      rpicam: null,
-      gst: null,
+      record: null,
+      inference: null,
       pids: {},
       stopRequested: false,
       exits: {},
@@ -114,14 +89,51 @@ class ProcessManager {
     this.currentSession = session;
     await this.writeState(session);
 
-    session.rpicam = this.spawnProcess(this.rpicamCmd, rpicamArgs, 'rpicam', session);
-    session.gst = this.spawnProcess(this.gstLaunchCmd, gstArgs, 'gst', session);
-    session.pids = {
-      rpicam: session.rpicam.pid,
-      gst: session.gst.pid,
-    };
-    await this.writeLock({ jobId, startedAt: session.startedAt, pids: session.pids });
-    await this.writeState(session);
+    let retained = false;
+    try {
+      if (this.pipeline) {
+        await this.pipeline.retain('session', { width, height, fps });
+        retained = true;
+      }
+
+      const inferenceArgs = this.buildGstArgs({
+        socketPath: this.socketPath,
+        width,
+        height,
+        fps,
+        metaPath: metaRawPath,
+        model: options.model,
+        modelOptions: { ...this.defaultModelOptions, ...(options.modelOptions || {}) },
+      });
+      const recordArgs = this.buildRecordArgs
+        ? this.buildRecordArgs({
+            socketPath: this.socketPath,
+            width,
+            height,
+            fps,
+            outputPath: videoPartPath,
+          })
+        : null;
+      if (!recordArgs) {
+        throw createError('Record pipeline not configured', 500);
+      }
+
+      session.record = this.spawnProcess(this.gstLaunchCmd, recordArgs, 'record', session);
+      session.inference = this.spawnProcess(this.gstLaunchCmd, inferenceArgs, 'inference', session);
+      session.pids = {
+        record: session.record.pid,
+        inference: session.inference.pid,
+      };
+      await this.writeLock({ jobId, startedAt: session.startedAt, pids: session.pids });
+      await this.writeState(session);
+    } catch (err) {
+      if (retained && this.pipeline) {
+        this.pipeline.release('session');
+      }
+      await this.releaseLock().catch(() => {});
+      this.currentSession = null;
+      throw err;
+    }
 
     return {
       jobId,
@@ -129,6 +141,7 @@ class ProcessManager {
       videoPath,
       metaPath,
       metaRawPath,
+      videoPartPath,
     };
   }
 
@@ -144,8 +157,8 @@ class ProcessManager {
     this.logger(`Stopping session ${jobId} (${reason})`);
 
     const stopTasks = [
-      this.terminateProcess(session.rpicam, 'rpicam', 'SIGINT'),
-      this.terminateProcess(session.gst, 'gst', 'SIGINT'),
+      this.terminateProcess(session.record, 'record', 'SIGINT'),
+      this.terminateProcess(session.inference, 'inference', 'SIGINT'),
     ];
     await Promise.all(stopTasks);
 
@@ -215,28 +228,24 @@ class ProcessManager {
 
     if (!session.stopRequested && code !== 0) {
       this.failSession(session, `${label} exited with code ${code}${signal ? ` (${signal})` : ''}`);
-      const other = label === 'rpicam' ? session.gst : session.rpicam;
-      this.terminateProcess(other, label === 'rpicam' ? 'gst' : 'rpicam', 'SIGINT').catch(() => {});
+      const other = label === 'record' ? session.inference : session.record;
+      this.terminateProcess(other, label === 'record' ? 'inference' : 'record', 'SIGINT').catch(() => {});
       return;
     }
 
-    if (!session.stopRequested && label === 'rpicam') {
+    if (!session.stopRequested) {
       session.stopRequested = true;
-      this.terminateProcess(session.gst, 'gst', 'SIGINT').catch(() => {});
-    }
-
-    if (!session.stopRequested && label === 'gst') {
-      session.stopRequested = true;
-      this.terminateProcess(session.rpicam, 'rpicam', 'SIGINT').catch(() => {});
+      const other = label === 'record' ? session.inference : session.record;
+      this.terminateProcess(other, label === 'record' ? 'inference' : 'record', 'SIGINT').catch(() => {});
     }
 
     this.maybeFinalize(session);
   }
 
   maybeFinalize(session) {
-    const rpicamDone = Boolean(session.exits.rpicam);
-    const gstDone = Boolean(session.exits.gst);
-    if (session.status === 'running' && rpicamDone && gstDone) {
+    const recordDone = Boolean(session.exits.record);
+    const inferenceDone = Boolean(session.exits.inference);
+    if (session.status === 'running' && recordDone && inferenceDone) {
       this.finishSession(session, 'stopped');
     }
   }
@@ -285,6 +294,10 @@ class ProcessManager {
     session.stoppedAt = Date.now();
     this.writeState(session).catch(() => {});
     this.releaseLock().catch(() => {});
+    this.finalizeVideo(session).catch(() => {});
+    if (this.pipeline) {
+      this.pipeline.release('session');
+    }
     if (this.onSessionFinished) {
       this.onSessionFinished(session).catch((err) => {
         this.logger('Session finish handler failed', err.message);
@@ -306,10 +319,20 @@ class ProcessManager {
       pids: session.pids,
       videoFile: session.videoFile,
       videoPath: session.videoPath,
+      videoPartPath: session.videoPartPath,
       metaPath: session.metaPath,
       metaRawPath: session.metaRawPath,
     };
     await fsp.writeFile(session.statePath, JSON.stringify(payload, null, 2));
+  }
+
+  async finalizeVideo(session) {
+    if (!session.videoPartPath || !session.videoPath) return;
+    try {
+      await fsp.rename(session.videoPartPath, session.videoPath);
+    } catch (err) {
+      this.logger('Video finalize failed', err.message);
+    }
   }
 
   readStateSync(statePath) {

@@ -5,7 +5,12 @@ const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const { ProcessManager } = require('./src/session/ProcessManager');
-const { buildGstLaunchArgs, buildGstFileArgs } = require('./src/session/gstPipeline');
+const {
+  buildGstFileArgs,
+  buildGstShmInferenceArgs,
+  buildGstShmPreviewArgs,
+  buildGstShmRecordArgs,
+} = require('./src/session/gstPipeline');
 const {
   readTail,
   parseTailFrames,
@@ -13,6 +18,7 @@ const {
   normalizeFrame,
 } = require('./src/session/tailParser');
 const { normalizeMetaFile } = require('./src/session/metaNormalizer');
+const { SharedPipeline } = require('./src/session/SharedPipeline');
 let AutoRecordManager;
 let RecorderController;
 
@@ -51,6 +57,8 @@ const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DI
 const SESSION_STATE_DIR = '/tmp';
 const SESSION_LOCK_FILE = '/tmp/session.lock';
 const SESSION_MAX_TAIL_FRAMES = 200;
+const SHARED_PIPELINE_SOCKET = '/tmp/hailo_camera.shm';
+const SHARED_PIPELINE_SHM_SIZE = 64 * 1024 * 1024;
 
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
@@ -71,31 +79,35 @@ const HELLO_COMMANDS = buildCommandList(process.env.CAMERA_HELLO_CMDS || process
   'libcamera-hello',
 ]);
 const SESSION_GST_CMD = process.env.GST_LAUNCH_CMD || 'gst-launch-1.0';
-const SESSION_RPICAM_CMD =
-  process.env.SESSION_RPICAM_CMD ||
-  VIDEO_COMMANDS.find((cmd) => cmd.includes('rpicam')) ||
-  VIDEO_COMMANDS[0] ||
-  'rpicam-vid';
 
 let busy = false;
 let lastCaptureAt = null;
 let lastError = null;
 let streamingActive = false;
 let streamClients = 0;
-let activeStreamCleanup = null;
 let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
+
+const sharedPipeline = new SharedPipeline({
+  gstCmd: SESSION_GST_CMD,
+  socketPath: SHARED_PIPELINE_SOCKET,
+  shmSize: SHARED_PIPELINE_SHM_SIZE,
+  logger: (...args) => log(...args),
+});
+const previewSessions = new Map();
+let previewSessionCounter = 0;
 
 const sessionManager = new ProcessManager({
   uploadDir: UPLOAD_DIR,
   metaDir: SESSION_META_DIR,
   stateDir: SESSION_STATE_DIR,
   lockFile: SESSION_LOCK_FILE,
-  rpicamCmd: SESSION_RPICAM_CMD,
   gstLaunchCmd: SESSION_GST_CMD,
-  libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
-  buildGstArgs: buildGstLaunchArgs,
+  buildGstArgs: buildGstShmInferenceArgs,
+  buildRecordArgs: buildGstShmRecordArgs,
+  pipeline: sharedPipeline,
+  socketPath: SHARED_PIPELINE_SOCKET,
   defaultModelOptions: { hefPath: HAILO_HEF_PATH },
   ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
@@ -155,7 +167,7 @@ app.get('/api/camera/status', async (_req, res) => {
   res.json({
     ok: true,
     cameraDetected,
-    busy: busyState || streamingActive,
+    busy: busyState,
     streaming: streamingActive,
     streamClients,
     lastStreamAt: lastStreamStateChange,
@@ -180,9 +192,6 @@ app.get('/api/camera/auto-record/status', (_req, res) => {
 app.post('/api/camera/auto-record/start', async (req, res) => {
   const manager = resolveAutoRecordManager(res);
   if (!manager) return;
-  if (streamingActive) {
-    return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
-  }
   if (await isBusy()) {
     return res.status(409).json({ ok: false, error: 'Camera busy' });
   }
@@ -349,6 +358,9 @@ app.post('/api/camera/capture', async (req, res) => {
   if (streamingActive) {
     return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
+  if (sharedPipeline.isRunning()) {
+    return res.status(409).json({ ok: false, error: 'Camera pipeline active' });
+  }
 
   const timeouts = computeTimeouts(options.format, options.durationSec);
   const acquired = await tryAcquireLock(timeouts.total);
@@ -381,6 +393,9 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
 
   if (streamingActive) {
     return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
+  }
+  if (sharedPipeline.isRunning()) {
+    return res.status(409).json({ ok: false, error: 'Camera pipeline active' });
   }
 
   const timeouts = computeTimeouts(options.format, options.durationSec);
@@ -440,58 +455,33 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Invalid stream token' });
     }
   }
-  if (await isBusy()) {
-    return res.status(409).json({ ok: false, error: 'Camera busy' });
-  }
-  if (streamingActive) {
-    return res.status(409).json({ ok: false, error: 'Stream already active' });
-  }
-
   const streamOptions = parseStreamOptions(req.query || {});
-  let pipeline;
-  let cleaned = false;
-
-  const cleanup = (reason) => {
-    if (cleaned) return;
-    cleaned = true;
-    setStreamingState(false);
-    if (activeStreamCleanup === cleanup) {
-      activeStreamCleanup = null;
-    }
-    log(`MJPEG stream cleanup (${reason})`);
-    if (pipeline) {
-      if (pipeline.source && pipeline.ffmpeg && pipeline.source.stdout && pipeline.ffmpeg.stdin) {
-        pipeline.source.stdout.unpipe(pipeline.ffmpeg.stdin);
-      }
-      if (pipeline.source && !pipeline.source.killed) {
-        pipeline.source.kill('SIGTERM');
-        setTimeout(() => pipeline.source.kill('SIGKILL'), 1500);
-      }
-      if (pipeline.ffmpeg && !pipeline.ffmpeg.killed) {
-        if (pipeline.ffmpeg.stdout) {
-          pipeline.ffmpeg.stdout.unpipe(res);
-        }
-        if (pipeline.ffmpeg.stdin && !pipeline.ffmpeg.stdin.destroyed) {
-          pipeline.ffmpeg.stdin.destroy();
-        }
-        pipeline.ffmpeg.kill('SIGTERM');
-        setTimeout(() => pipeline.ffmpeg.kill('SIGKILL'), 1500);
-      }
-    }
-    if (!res.writableEnded) {
-      res.end();
-    }
+  const sourceConfig = sharedPipeline.getConfig() || {
+    width: SESSION_DEFAULTS.width,
+    height: SESSION_DEFAULTS.height,
+    fps: SESSION_DEFAULTS.fps,
   };
 
   try {
-    pipeline = await startStreamPipeline(streamOptions);
+    await sharedPipeline.retain('preview', sourceConfig);
   } catch (err) {
-    const status = err.httpStatus || 500;
+    const status = err.status || 503;
     return res.status(status).json({ ok: false, error: err.message });
   }
 
-  setStreamingState(true, 1);
-  activeStreamCleanup = cleanup;
+  const previewId = ++previewSessionCounter;
+  const previewArgs = buildGstShmPreviewArgs({
+    socketPath: SHARED_PIPELINE_SOCKET,
+    srcWidth: sourceConfig.width,
+    srcHeight: sourceConfig.height,
+    srcFps: sourceConfig.fps,
+    width: streamOptions.width,
+    height: streamOptions.height,
+    fps: streamOptions.fps,
+  });
+  const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+  previewSessions.set(previewId, { proc: previewProc, res });
+  setStreamingState(true, previewSessions.size);
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
@@ -503,31 +493,36 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     res.flushHeaders();
   }
 
-  const handleError = (label) => (err) => {
-    if (err && err.message) {
-      log(`${label} stream error:`, err.message);
-    } else {
-      log(`${label} stream error`);
+  const cleanup = (reason) => {
+    if (!previewSessions.has(previewId)) return;
+    previewSessions.delete(previewId);
+    sharedPipeline.release('preview');
+    setStreamingState(previewSessions.size > 0, previewSessions.size);
+    log(`MJPEG stream cleanup (${reason})`);
+    if (previewProc && previewProc.exitCode === null) {
+      previewProc.kill('SIGINT');
     }
-    cleanup(`${label}_error`);
+    if (!res.writableEnded) {
+      res.end();
+    }
   };
 
-  pipeline.ffmpeg.stdout.on('data', (chunk) => {
+  previewProc.stdout.on('data', (chunk) => {
     if (!res.writableEnded) {
       res.write(chunk);
     }
   });
-  pipeline.ffmpeg.stdout.on('error', handleError('ffmpeg_stdout'));
-
-  const onClose = (label) => (code, signal) => {
-    log(`${label} stream process closed`, code, signal || '');
-    cleanup(`${label}_close`);
-  };
-
-  pipeline.source.on('error', handleError('source'));
-  pipeline.ffmpeg.on('error', handleError('ffmpeg'));
-  pipeline.source.on('close', onClose('source'));
-  pipeline.ffmpeg.on('close', onClose('ffmpeg'));
+  previewProc.stderr.on('data', (data) => {
+    log('preview stderr:', data.toString());
+  });
+  previewProc.on('error', (err) => {
+    log('preview process error:', err.message);
+    cleanup('preview_error');
+  });
+  previewProc.on('close', (code, signal) => {
+    log('preview process closed', code, signal || '');
+    cleanup('preview_close');
+  });
 
   const onClientClose = () => cleanup('client_disconnect');
   req.on('close', onClientClose);
@@ -540,11 +535,24 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
 });
 
 app.post('/api/camera/stream/stop', (_req, res) => {
-  if (activeStreamCleanup) {
-    activeStreamCleanup('manual_stop');
+  if (previewSessions.size > 0) {
+    const count = previewSessions.size;
+    for (const [id, session] of previewSessions.entries()) {
+      if (session && session.proc && session.proc.exitCode === null) {
+        session.proc.kill('SIGINT');
+      }
+      if (session && session.res && !session.res.writableEnded) {
+        session.res.end();
+      }
+      previewSessions.delete(id);
+    }
+    for (let i = 0; i < count; i += 1) {
+      sharedPipeline.release('preview');
+    }
+    setStreamingState(false, 0);
     return res.json({ ok: true, stopped: true });
   }
-  res.json({ ok: true, stopped: false });
+  return res.json({ ok: true, stopped: false });
 });
 
 app.use((err, _req, res, _next) => {
@@ -862,7 +870,7 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
 }
 
 async function isBusy() {
-  if (busy || sessionManager.isRunning()) return true;
+  if (busy) return true;
   try {
     await fsp.access(LOCK_FILE, fs.constants.F_OK);
   } catch (_) {
@@ -905,7 +913,7 @@ async function cleanupStaleLock() {
 
 async function tryAcquireLock(expectedMs) {
   await cleanupStaleLock();
-  if (busy || sessionManager.isRunning()) return false;
+  if (busy) return false;
   const expiresAt = Date.now() + Math.max(expectedMs + COMMAND_GRACE_MS, 5000);
   const payload = JSON.stringify({
     pid: process.pid,
@@ -1060,88 +1068,6 @@ async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {
   logOutputs(stdout, stderr);
 }
 
-async function startStreamPipeline({ width, height, fps, quality }) {
-  const preferred = buildStreamCommandList();
-  let lastErr = null;
-
-  for (const command of preferred) {
-    const args = [
-      '--codec',
-      'yuv420',
-      '--width',
-      String(width),
-      '--height',
-      String(height),
-      '--framerate',
-      String(fps),
-      '-t',
-      '0',
-      '-o',
-      '-',
-      '-n',
-    ];
-
-    let source;
-    try {
-      source = await spawnStreamingProcess(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      const ffmpegArgs = [
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-f',
-        'rawvideo',
-        '-pix_fmt',
-        'yuv420p',
-        '-s',
-        `${width}x${height}`,
-        '-r',
-        String(fps),
-        '-i',
-        '-',
-        '-f',
-        'mpjpeg',
-        '-q:v',
-        String(quality),
-        '-',
-      ];
-      const ffmpeg = await spawnStreamingProcess('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-
-      source.stdout.pipe(ffmpeg.stdin);
-
-      source.stderr.on('data', (data) => log('stream source stderr:', truncate(data.toString())));
-      ffmpeg.stderr.on('data', (data) => log('stream ffmpeg stderr:', truncate(data.toString())));
-
-      return { source, ffmpeg };
-    } catch (err) {
-      if (source && !source.killed) {
-        source.kill('SIGTERM');
-        setTimeout(() => source.kill('SIGKILL'), 1500);
-      }
-      lastErr = err;
-      log(`Streaming via ${command} failed:`, err.message);
-      continue;
-    }
-  }
-
-  throw httpError(lastErr?.message || 'Unable to start streaming pipeline', lastErr?.httpStatus || 500);
-}
-
-function spawnStreamingProcess(command, args, options) {
-  return new Promise((resolve, reject) => {
-    logCommand(command, args);
-    const child = spawn(command, args, options);
-    const handleError = (err) => {
-      child.off('spawn', handleSpawn);
-      reject(err);
-    };
-    const handleSpawn = () => {
-      child.off('error', handleError);
-      resolve(child);
-    };
-    child.once('error', handleError);
-    child.once('spawn', handleSpawn);
-  });
-}
 
 async function runCommand(command, args, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -1257,22 +1183,4 @@ function buildCommandList(raw, defaults) {
     .map((v) => v.trim())
     .filter(Boolean);
   return list.length ? list : defaults;
-}
-
-function buildStreamCommandList() {
-  const preferred = [];
-  const seen = new Set();
-  for (const cmd of VIDEO_COMMANDS) {
-    if (/rpicam/.test(cmd) && !seen.has(cmd)) {
-      preferred.push(cmd);
-      seen.add(cmd);
-    }
-  }
-  for (const cmd of VIDEO_COMMANDS) {
-    if (!seen.has(cmd)) {
-      preferred.push(cmd);
-      seen.add(cmd);
-    }
-  }
-  return preferred.length ? preferred : ['rpicam-vid'];
 }

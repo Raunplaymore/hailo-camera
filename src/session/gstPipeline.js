@@ -45,6 +45,94 @@ function buildGstLaunchArgs(options) {
   ];
 }
 
+function buildGstShmInferenceArgs(options) {
+  const { socketPath, width, height, fps, metaPath } = options;
+  const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'do-timestamp=true',
+    '!',
+    `video/x-raw,width=${width},height=${height},format=NV12,framerate=${fps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
+    '!',
+    'hailonet',
+    `hef-path=${modelOptions.hefPath}`,
+    '!',
+    'hailofilter',
+    `so-path=${modelOptions.postProcessLib}`,
+    `function-name=${modelOptions.postProcessFunc}`,
+    '!',
+    'hailoexportfile',
+    `location=${metaPath}`,
+    '!',
+    'fakesink',
+    'sync=false',
+  ];
+}
+
+function buildGstShmPreviewArgs(options) {
+  const { socketPath, srcWidth, srcHeight, srcFps, width, height, fps } = options;
+  const outWidth = width || srcWidth;
+  const outHeight = height || srcHeight;
+  const outFps = fps || srcFps;
+
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'do-timestamp=true',
+    '!',
+    `video/x-raw,width=${srcWidth},height=${srcHeight},format=NV12,framerate=${srcFps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    'videorate',
+    '!',
+    `video/x-raw,width=${outWidth},height=${outHeight},framerate=${outFps}/1`,
+    '!',
+    'jpegenc',
+    '!',
+    'multipartmux',
+    'boundary=ffmpeg',
+    '!',
+    'fdsink',
+  ];
+}
+
+function buildGstShmRecordArgs(options) {
+  const { socketPath, width, height, fps, outputPath } = options;
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'do-timestamp=true',
+    '!',
+    `video/x-raw,width=${width},height=${height},format=NV12,framerate=${fps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'avenc_h264',
+    '!',
+    'h264parse',
+    '!',
+    'mp4mux',
+    'faststart=true',
+    '!',
+    'filesink',
+    `location=${outputPath}`,
+  ];
+}
+
 function buildGstFileArgs(options) {
   const { inputPath, format, metaPath } = options;
   const modelOptions = resolveModelOptions(options.model, options.modelOptions);
@@ -108,5 +196,8 @@ function buildFileSourceArgs(format, inputPath) {
 module.exports = {
   buildGstLaunchArgs,
   buildGstFileArgs,
+  buildGstShmInferenceArgs,
+  buildGstShmPreviewArgs,
+  buildGstShmRecordArgs,
   resolveModelOptions,
 };

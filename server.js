@@ -4,6 +4,9 @@ const path = require('path');
 const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
+const { ProcessManager } = require('./src/session/ProcessManager');
+const { buildGstLaunchArgs } = require('./src/session/gstPipeline');
+const { readTail, parseTailFrames } = require('./src/session/tailParser');
 let AutoRecordManager;
 let RecorderController;
 
@@ -33,6 +36,16 @@ const DEFAULTS = {
   videoDurationSec: parseInt(process.env.DEFAULT_VIDEO_DURATION_SEC, 10) || 3,
 };
 
+const SESSION_DEFAULTS = {
+  width: 1456,
+  height: 1088,
+  fps: 60,
+};
+const SESSION_META_DIR = '/tmp';
+const SESSION_STATE_DIR = '/tmp';
+const SESSION_LOCK_FILE = '/tmp/session.lock';
+const SESSION_MAX_TAIL_FRAMES = 200;
+
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
@@ -50,6 +63,12 @@ const HELLO_COMMANDS = buildCommandList(process.env.CAMERA_HELLO_CMDS || process
   'rpicam-hello',
   'libcamera-hello',
 ]);
+const SESSION_GST_CMD = process.env.GST_LAUNCH_CMD || 'gst-launch-1.0';
+const SESSION_RPICAM_CMD =
+  process.env.SESSION_RPICAM_CMD ||
+  VIDEO_COMMANDS.find((cmd) => cmd.includes('rpicam')) ||
+  VIDEO_COMMANDS[0] ||
+  'rpicam-vid';
 
 let busy = false;
 let lastCaptureAt = null;
@@ -60,6 +79,20 @@ let activeStreamCleanup = null;
 let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
+
+const sessionManager = new ProcessManager({
+  uploadDir: UPLOAD_DIR,
+  metaDir: SESSION_META_DIR,
+  stateDir: SESSION_STATE_DIR,
+  lockFile: SESSION_LOCK_FILE,
+  rpicamCmd: SESSION_RPICAM_CMD,
+  gstLaunchCmd: SESSION_GST_CMD,
+  libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
+  buildGstArgs: buildGstLaunchArgs,
+  ensureUploadsDir,
+  logger: (...args) => log(...args),
+});
+sessionManager.registerSignalHandlers();
 
 if (tsNodeRegistered && AutoRecordManager && RecorderController) {
   try {
@@ -168,6 +201,82 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
       error: err.message || 'Failed to stop auto record',
       status: safeManagerStatus(),
     });
+  }
+});
+
+app.post('/api/session/start', async (req, res) => {
+  let options;
+  try {
+    options = parseSessionOptions(req.body || {});
+  } catch (err) {
+    return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
+  }
+
+  if (streamingActive) {
+    return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
+  }
+  if (await isBusy()) {
+    return res.status(409).json({ ok: false, error: 'Camera busy' });
+  }
+
+  const jobId = buildJobId();
+  try {
+    const session = await sessionManager.startSession({ jobId, ...options });
+    res.json({
+      ok: true,
+      jobId,
+      videoFile: session.videoFile,
+      videoUrl: `/uploads/${session.videoFile}`,
+      metaPath: session.metaPath,
+    });
+  } catch (err) {
+    const status = err.status || err.httpStatus || 500;
+    res.status(status).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/session/:jobId/stop', async (req, res) => {
+  const jobId = req.params.jobId;
+  try {
+    const session = await sessionManager.stopSession(jobId, 'user');
+    res.json({
+      ok: true,
+      jobId,
+      videoUrl: `/uploads/${session.videoFile}`,
+      metaPath: session.metaPath,
+      stoppedAt: session.stoppedAt,
+    });
+  } catch (err) {
+    const status = err.status || err.httpStatus || 500;
+    res.status(status).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/session/:jobId/status', (req, res) => {
+  const jobId = req.params.jobId;
+  const status = sessionManager.getStatus(jobId);
+  if (!status) {
+    return res.status(404).json({ ok: false, error: 'Session not found' });
+  }
+  res.json({ ok: true, jobId, ...status });
+});
+
+app.get('/api/session/:jobId/live', async (req, res) => {
+  const jobId = req.params.jobId;
+  const tailFrames = clamp(
+    parseNonNegativeNumber(req.query.tailFrames, 30),
+    1,
+    SESSION_MAX_TAIL_FRAMES,
+  );
+  const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
+  const tailBytes = Math.min(512 * 1024, Math.max(16 * 1024, tailFrames * 4096));
+
+  try {
+    const text = await readTail(metaPath, tailBytes);
+    const frames = parseTailFrames(text, tailFrames);
+    res.json({ ok: true, jobId, frames });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, frames: [] });
   }
 });
 
@@ -406,6 +515,28 @@ function authMiddleware(req, res, next) {
   return res.status(401).json({ ok: false, error: 'Unauthorized' });
 }
 
+function parseSessionOptions(body) {
+  const width = parsePositiveNumber(body.width, SESSION_DEFAULTS.width);
+  const height = parsePositiveNumber(body.height, SESSION_DEFAULTS.height);
+  const fps = parsePositiveNumber(body.fps, SESSION_DEFAULTS.fps);
+  const durationSec = parseNonNegativeNumber(body.durationSec, 0);
+  const model = (body.model || 'yolov8s').toLowerCase();
+  if (model !== 'yolov8s') {
+    throw httpError('Invalid model. Use yolov8s', 400);
+  }
+  return { width, height, fps, durationSec, model };
+}
+
+function buildJobId() {
+  const now = new Date();
+  const pad = (n, len = 2) => String(n).padStart(len, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
+    now.getHours(),
+  )}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad(now.getMilliseconds(), 3)}`;
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `session_${ts}_${suffix}`;
+}
+
 function parseCaptureOptions(body) {
   const format = (body.format || 'jpg').toLowerCase();
   if (!['jpg', 'h264', 'mp4'].includes(format)) {
@@ -494,6 +625,17 @@ function parsePositiveNumber(value, fallback) {
   return num;
 }
 
+function parseNonNegativeNumber(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return fallback;
+  return num;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function parseStreamOptions(query) {
   const width = parsePositiveNumber(query.width, 640);
   const height = parsePositiveNumber(query.height, 360);
@@ -513,7 +655,7 @@ async function ensureUploadsDir() {
 }
 
 async function isBusy() {
-  if (busy) return true;
+  if (busy || sessionManager.isRunning()) return true;
   try {
     await fsp.access(LOCK_FILE, fs.constants.F_OK);
   } catch (_) {
@@ -556,7 +698,7 @@ async function cleanupStaleLock() {
 
 async function tryAcquireLock(expectedMs) {
   await cleanupStaleLock();
-  if (busy) return false;
+  if (busy || sessionManager.isRunning()) return false;
   const expiresAt = Date.now() + Math.max(expectedMs + COMMAND_GRACE_MS, 5000);
   const payload = JSON.stringify({
     pid: process.pid,

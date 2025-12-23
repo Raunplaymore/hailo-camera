@@ -33,12 +33,15 @@ npm start            # PORT=3001 default
 | `CAMERA_*_CMDS` | rpicam/libcamera 실행 우선순위 |
 | `SESSION_RPICAM_CMD` | 세션 녹화용 rpicam-vid 경로 (default `rpicam-vid`) |
 | `GST_LAUNCH_CMD` | GStreamer 실행 명령 (default `gst-launch-1.0`) |
-| `META_DIR` | 세션 메타 json 경로 (default `/tmp`) |
+| `META_DIR` | 메타 json 경로 (default `/tmp`) |
 | `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
+| `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s_h8.hef`) |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
 mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename합니다. `.part` 파일은 미완성으로 간주하세요.
+
+`ANALYZE_URL`은 캡처+메타 생성 또는 세션 종료 후 백엔드 후속 분석을 트리거하는 용도로 사용됩니다.
 
 > Auto record 데모 기능은 부팅 시 `ts-node/register` 로 TypeScript 파일을 직접 로드합니다. `ts-node` 사용이 어려우면 `npm run build:auto`로 미리 컴파일하거나 해당 기능을 비활성화하세요.
 
@@ -66,8 +69,11 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 `POST /api/camera/capture-and-analyze`
 
-- 캡처 후 `ANALYZE_URL`로 `{ filename, force? }` 전송
-- 성공 시 `{ ok:true, jobId, filename, status:"queued" }`
+- 캡처 후 Hailo inference를 수행해 `META_DIR/<base>.meta.json` 생성 (`<base>`는 파일명 확장자 제거)
+- 완료 후 `ANALYZE_URL`로 `{ jobId:<base>, filename, metaPath, force? }` 전송 (실패해도 캡처 결과는 유지)
+- 응답: `{ ok:true, filename, url, metaPath }`
+- `analyze`는 메타 생성 의미이며 스윙 이벤트/코칭 해석은 포함하지 않습니다.
+- 메타 포맷은 `/api/session/:jobId/meta` 와 동일합니다.
 
 ### 2.2 상태 및 스트림
 
@@ -109,9 +115,9 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - `durationSec=0` 이면 `stop` 호출 전까지 계속 진행합니다.
 - `jobId`는 서버에서 생성됩니다.
 - 녹화 파일: `/home/ray/uploads/<jobId>.mp4` (기본값, `UPLOAD_DIR` 설정 시 변경)
-- 메타 파일: `/tmp/<jobId>.meta.json` (세션 종료 시 프레임 배열로 정규화됨)
+- 메타 파일: `META_DIR/<jobId>.meta.json` (default `/tmp`, 세션 종료 시 프레임 배열로 정규화됨)
 - GStreamer 파이프라인: `libcamerasrc → NV12 → scale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
-  - `hailonet`: `/usr/share/hailo-models/yolov8s_h8.hef`
+  - `hailonet`: `HAILO_HEF_PATH` (default `/usr/share/hailo-models/yolov8s_h8.hef`)
   - `hailofilter`: `libyolo_hailortpp_post.so`, function `yolov8s`
 
 응답:
@@ -150,8 +156,19 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 `GET /api/session/:jobId/meta`
 
 - 정규화된 메타를 `{ frames: [...] }` 형태로 반환합니다.
+- 메타 프레임 형식:
 
-통합 메모: 세션 종료 후 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4" }` 형태로 후속 분석을 트리거하세요.
+```json
+{
+  "t": 1700000000000,
+  "frame": 123,
+  "detections": [
+    { "label": "golf_ball", "classId": 0, "conf": 0.9, "bbox": [x, y, w, h] }
+  ]
+}
+```
+
+통합 메모: 세션 종료 시 서버가 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4", metaPath }` 를 전송합니다. (필요 시 백엔드에서 동일 포맷으로 재시도 가능)
 
 ### 2.4 Auto Record 데모
 

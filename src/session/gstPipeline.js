@@ -45,6 +45,68 @@ function buildGstLaunchArgs(options) {
   ];
 }
 
+function buildGstFileArgs(options) {
+  const { inputPath, format, metaPath } = options;
+  const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const sourceArgs = buildFileSourceArgs(format, inputPath);
+
+  return [
+    '-e',
+    ...sourceArgs,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
+    '!',
+    'hailonet',
+    `hef-path=${modelOptions.hefPath}`,
+    '!',
+    'hailofilter',
+    `so-path=${modelOptions.postProcessLib}`,
+    `function-name=${modelOptions.postProcessFunc}`,
+    '!',
+    'hailoexportfile',
+    `location=${metaPath}`,
+    '!',
+    'fakesink',
+    'sync=false',
+  ];
+}
+
+function buildFileSourceArgs(format, inputPath) {
+  const normalized = (format || '').toLowerCase();
+  if (normalized === 'mp4') {
+    return [
+      'filesrc',
+      `location=${inputPath}`,
+      '!',
+      'qtdemux',
+      '!',
+      'h264parse',
+      '!',
+      'avdec_h264',
+    ];
+  }
+  if (normalized === 'h264') {
+    return [
+      'filesrc',
+      `location=${inputPath}`,
+      '!',
+      'h264parse',
+      '!',
+      'avdec_h264',
+    ];
+  }
+  if (normalized === 'jpg' || normalized === 'jpeg') {
+    return ['filesrc', `location=${inputPath}`, '!', 'jpegdec'];
+  }
+  throw new Error(`Unsupported format for inference: ${format}`);
+}
+
 module.exports = {
   buildGstLaunchArgs,
+  buildGstFileArgs,
+  resolveModelOptions,
 };

@@ -5,7 +5,7 @@ const { spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const { ProcessManager } = require('./src/session/ProcessManager');
-const { buildGstLaunchArgs } = require('./src/session/gstPipeline');
+const { buildGstLaunchArgs, buildGstFileArgs } = require('./src/session/gstPipeline');
 const {
   readTail,
   parseTailFrames,
@@ -57,6 +57,7 @@ const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
+const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s_h8.hef';
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
   'libcamera-still',
@@ -95,6 +96,7 @@ const sessionManager = new ProcessManager({
   gstLaunchCmd: SESSION_GST_CMD,
   libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
   buildGstArgs: buildGstLaunchArgs,
+  defaultModelOptions: { hefPath: HAILO_HEF_PATH },
   ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
   onSessionFinished: async (session) => {
@@ -253,7 +255,6 @@ app.post('/api/session/:jobId/stop', async (req, res) => {
       jobId,
       videoUrl: `/uploads/${session.videoFile}`,
       metaPath: session.metaPath,
-      stoppedAt: session.stoppedAt,
     });
   } catch (err) {
     const status = err.status || err.httpStatus || 500;
@@ -381,33 +382,36 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     filename = await handleCapture(options, timeouts);
     lastCaptureAt = new Date().toISOString();
     lastError = null;
+    const metaBase = deriveMetaBase(filename);
+    const metaPath = path.join(SESSION_META_DIR, `${metaBase}.meta.json`);
+    const metaRawPath = `${metaPath}.raw`;
 
-    const analyzeTarget = ANALYZE_URL;
-    let jobId = null;
-    try {
-      const analyzePayload = {
-        filename: options.filename,
-        force: Boolean(req.body?.force),
-      };
-      const analyzeResp = await fetch(analyzeTarget, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
-        },
-        body: JSON.stringify(analyzePayload),
-      });
-      const data = await analyzeResp.json().catch(() => ({}));
-      if (!analyzeResp.ok) {
-        throw new Error(data.error || `Analyze failed with status ${analyzeResp.status}`);
-      }
-      jobId = data.jobId || data.id || null;
-    } catch (err) {
-      lastError = err.message;
-      return res.status(500).json({ ok: false, error: `Analyze request failed: ${err.message}` });
-    }
+    await ensureSessionDirs();
+    await runHailoInferenceOnFile({
+      format: options.format,
+      inputPath: path.join(UPLOAD_DIR, filename),
+      metaRawPath,
+      model: 'yolov8s',
+      durationSec: options.durationSec,
+    });
+    await normalizeMetaFile(metaRawPath, metaPath, {
+      jobId: metaBase,
+      labelMap: parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
+    });
 
-    res.json({ ok: true, jobId, filename, status: 'queued', url: `/uploads/${filename}` });
+    triggerAnalyzeRequest({
+      jobId: metaBase,
+      filename,
+      metaPath,
+      force: Boolean(req.body?.force),
+    }).catch(() => {});
+
+    res.json({
+      ok: true,
+      filename,
+      url: `/uploads/${filename}`,
+      metaPath,
+    });
   } catch (err) {
     lastError = err.message;
     const status = err.httpStatus || (err.code === 'TIMEOUT' ? 504 : 500);
@@ -751,6 +755,62 @@ async function finalizeSessionMeta(session) {
     });
   } catch (err) {
     log('Meta normalization failed', err.message);
+  } finally {
+    triggerAnalyzeRequest({
+      jobId: session.jobId,
+      filename: session.videoFile,
+      metaPath: session.metaPath,
+    }).catch(() => {});
+  }
+}
+
+async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, durationSec }) {
+  const gstArgs = buildGstFileArgs({
+    format,
+    inputPath,
+    metaPath: metaRawPath,
+    model,
+    modelOptions: { hefPath: HAILO_HEF_PATH },
+  });
+  const timeoutMs = computeAnalyzeTimeout(format, durationSec);
+  logCommand(SESSION_GST_CMD, gstArgs);
+  const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
+  logOutputs(stdout, stderr);
+}
+
+function computeAnalyzeTimeout(format, durationSec) {
+  if (format === 'jpg') return 5000;
+  const durationMs = Math.max(1, durationSec || 0) * 1000;
+  return Math.max(8000, durationMs + COMMAND_GRACE_MS + 4000);
+}
+
+function deriveMetaBase(filename) {
+  return path.basename(filename).replace(/\.[^.]+$/, '');
+}
+
+async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
+  if (!ANALYZE_URL) return;
+  const payload = {
+    jobId,
+    filename,
+    metaPath,
+    force: Boolean(force),
+  };
+  try {
+    const analyzeResp = await fetch(ANALYZE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!analyzeResp.ok) {
+      const data = await analyzeResp.json().catch(() => ({}));
+      throw new Error(data.error || `Analyze failed with status ${analyzeResp.status}`);
+    }
+  } catch (err) {
+    log('Analyze trigger failed', err.message);
   }
 }
 

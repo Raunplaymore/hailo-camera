@@ -24,6 +24,7 @@ class ProcessManager {
     this.buildGstArgs = options.buildGstArgs;
     this.ensureUploadsDir = options.ensureUploadsDir || this.defaultEnsureUploadsDir.bind(this);
     this.onSessionFinished = options.onSessionFinished || null;
+    this.defaultModelOptions = options.defaultModelOptions || {};
     this.currentSession = null;
     this.signalHandlersRegistered = false;
   }
@@ -89,7 +90,7 @@ class ProcessManager {
       fps,
       metaPath: metaRawPath,
       model: options.model,
-      modelOptions: options.modelOptions,
+      modelOptions: { ...this.defaultModelOptions, ...(options.modelOptions || {}) },
     });
 
     const session = {

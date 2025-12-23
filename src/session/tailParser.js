@@ -151,12 +151,13 @@ function normalizeDetection(det) {
   const classId = numberOrNull(det.class_id ?? det.classId ?? det.id ?? det.class_index);
   const conf = numberOrNull(det.confidence ?? det.conf ?? det.score ?? det.prob);
   const bbox = normalizeBbox(det.bbox ?? det.box ?? det.rect ?? det);
-  if (!bbox && label === null && classId === null) return null;
+  if (!bbox || conf === null) return null;
+  if (label === null && classId === null) return null;
   return {
-    label: label || 'unknown',
+    label: label || (classId !== null ? 'unknown' : null),
     classId,
     conf,
-    bbox: bbox || null,
+    bbox,
   };
 }
 

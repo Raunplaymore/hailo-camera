@@ -33,6 +33,8 @@ npm start            # PORT=3001 default
 | `CAMERA_*_CMDS` | rpicam/libcamera 실행 우선순위 |
 | `SESSION_RPICAM_CMD` | 세션 녹화용 rpicam-vid 경로 (default `rpicam-vid`) |
 | `GST_LAUNCH_CMD` | GStreamer 실행 명령 (default `gst-launch-1.0`) |
+| `META_DIR` | 세션 메타 json 경로 (default `/tmp`) |
+| `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
@@ -107,7 +109,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - `durationSec=0` 이면 `stop` 호출 전까지 계속 진행합니다.
 - `jobId`는 서버에서 생성됩니다.
 - 녹화 파일: `/home/ray/uploads/<jobId>.mp4` (기본값, `UPLOAD_DIR` 설정 시 변경)
-- 메타 파일: `/tmp/<jobId>.meta.json`
+- 메타 파일: `/tmp/<jobId>.meta.json` (세션 종료 시 프레임 배열로 정규화됨)
 - GStreamer 파이프라인: `libcamerasrc → NV12 → scale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
   - `hailonet`: `/usr/share/hailo-models/yolov8s_h8.hef`
   - `hailofilter`: `libyolo_hailortpp_post.so`, function `yolov8s`
@@ -144,6 +146,10 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
   ]
 }
 ```
+
+`GET /api/session/:jobId/meta`
+
+- 정규화된 메타를 `{ frames: [...] }` 형태로 반환합니다.
 
 통합 메모: 세션 종료 후 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4" }` 형태로 후속 분석을 트리거하세요.
 
@@ -204,6 +210,9 @@ curl -s http://localhost:3001/api/session/<jobId>/status
 
 # 세션 라이브(최근 탐지)
 curl -s "http://localhost:3001/api/session/<jobId>/live?tailFrames=30"
+
+# 세션 메타(정규화)
+curl -s http://localhost:3001/api/session/<jobId>/meta
 
 # 세션 종료
 curl -X POST http://localhost:3001/api/session/<jobId>/stop

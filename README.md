@@ -26,12 +26,17 @@ npm start            # PORT=3001 default
 | `UPLOAD_DIR` | 캡처 저장 경로 (default `/home/ray/uploads`) |
 | `STREAM_TOKEN` | `/api/camera/stream.mjpeg` 접근 토큰 (`?token=` / `X-Stream-Token`) |
 | `ANALYZE_URL` | 분석 API (default `http://127.0.0.1:3000/api/analyze/from-file`) |
-| `DEFAULT_*` | 캡처 기본 해상도/FPS/길이 |
+| `DEFAULT_WIDTH` / `DEFAULT_HEIGHT` | 캡처 기본 해상도 (default 1920×1080) |
+| `DEFAULT_FPS` | JPG/영상 기본 FPS (default 30) |
+| `DEFAULT_STILL_DURATION_SEC` | JPG 캡처 기본 길이 (default 1초) |
+| `DEFAULT_VIDEO_DURATION_SEC` | h264/mp4 기본 길이 (default 3초) |
 | `CAMERA_*_CMDS` | rpicam/libcamera 실행 우선순위 |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
 mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename합니다. `.part` 파일은 미완성으로 간주하세요.
+
+> Auto record 데모 기능은 부팅 시 `ts-node/register` 로 TypeScript 파일을 직접 로드합니다. `ts-node` 사용이 어려우면 `npm run build:auto`로 미리 컴파일하거나 해당 기능을 비활성화하세요.
 
 ---
 
@@ -83,7 +88,17 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - 한 번에 1명만 허용, 토큰이 설정되면 `?token=` 필수
 - `POST /api/camera/stream/stop` 로 강제 종료 가능
 
-### 2.3 기타
+### 2.3 Auto Record 데모
+
+`src/auto/*` 에 구현된 `AutoRecordManager`는 데모용 자동 녹화 상태머신(arming → addressLocked → recording → finishLocked → idle)입니다. 서버 시작 시 `ts-node`로 로드되어 있을 때만 활성화되며, 락/스트림 상태를 공유하므로 다른 캡처와 동시에 실행되지 않습니다.
+
+- `GET /api/camera/auto-record/status` : `{ ok, status }` 로 현재 state, `startedAt`, `recordingFilename`, `lastError` 를 확인합니다.
+- `POST /api/camera/auto-record/start` : 스트림/캡처가 진행 중이면 `409` 를 반환합니다. 성공 시 상태머신이 순차적으로 mp4 녹화를 수행합니다.
+- `POST /api/camera/auto-record/stop` : 진행 중인 녹화를 중단하고 세션을 종료합니다.
+
+오토 녹화 실패 시 `status.lastError`에 에러 메시지가 들어가며 state가 `failed` 로 고정됩니다. 이때 `start` 를 다시 호출하면 세션이 초기화됩니다.
+
+### 2.4 기타
 
 - `GET /uploads/:name` : 저장 파일 정적 서빙
 - 스모크 테스트: `npm test` 또는 `PORT=3001 node scripts/smoke_test.js`

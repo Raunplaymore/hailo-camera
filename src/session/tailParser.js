@@ -33,6 +33,39 @@ function parseTailFrames(text, limit) {
   return lineFrames.map(normalizeFrame).filter((frame) => frame.t !== null || frame.detections.length);
 }
 
+function parseFramesFromText(text, limit = Infinity) {
+  const frames = [];
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') {
+      if (depth === 0) {
+        start = i;
+      }
+      depth += 1;
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start !== -1) {
+          const candidate = text.slice(start, i + 1);
+          const parsed = safeParse(candidate);
+          if (parsed && isLikelyFrame(parsed)) {
+            frames.push(normalizeFrame(parsed));
+            if (frames.length >= limit) {
+              break;
+            }
+          }
+          start = -1;
+        }
+      }
+    }
+  }
+
+  return frames;
+}
+
 function extractJsonFrames(text, limit) {
   const frames = [];
   let end = text.lastIndexOf('}');
@@ -97,7 +130,9 @@ function isLikelyFrame(obj) {
 }
 
 function normalizeFrame(frame) {
-  const t = numberOrNull(frame['timestamp (ms)'] ?? frame.timestamp ?? frame.ts ?? frame.timestamp_ms);
+  const t = numberOrNull(
+    frame.t ?? frame['timestamp (ms)'] ?? frame.timestamp ?? frame.ts ?? frame.timestamp_ms,
+  );
   const frameId = numberOrNull(frame.frame_id ?? frame.frame ?? frame.frameId);
   const detectionsRaw = frame.detections || frame.objects || frame.boxes || [];
   const detections = Array.isArray(detectionsRaw)
@@ -160,4 +195,6 @@ function numberOrNull(value) {
 module.exports = {
   readTail,
   parseTailFrames,
+  parseFramesFromText,
+  normalizeFrame,
 };

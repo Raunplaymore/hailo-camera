@@ -23,6 +23,7 @@ class ProcessManager {
     this.logger = options.logger || (() => {});
     this.buildGstArgs = options.buildGstArgs;
     this.ensureUploadsDir = options.ensureUploadsDir || this.defaultEnsureUploadsDir.bind(this);
+    this.onSessionFinished = options.onSessionFinished || null;
     this.currentSession = null;
     this.signalHandlersRegistered = false;
   }
@@ -59,6 +60,7 @@ class ProcessManager {
     const videoFile = `${jobId}.mp4`;
     const videoPath = path.join(this.uploadDir, videoFile);
     const metaPath = path.join(this.metaDir, `${jobId}.meta.json`);
+    const metaRawPath = `${metaPath}.raw`;
     const statePath = path.join(this.stateDir, `${jobId}.session.json`);
 
     const rpicamArgs = [
@@ -85,7 +87,7 @@ class ProcessManager {
       width,
       height,
       fps,
-      metaPath,
+      metaPath: metaRawPath,
       model: options.model,
       modelOptions: options.modelOptions,
     });
@@ -99,6 +101,7 @@ class ProcessManager {
       videoFile,
       videoPath,
       metaPath,
+      metaRawPath,
       statePath,
       rpicam: null,
       gst: null,
@@ -124,6 +127,7 @@ class ProcessManager {
       videoFile,
       videoPath,
       metaPath,
+      metaRawPath,
     };
   }
 
@@ -280,6 +284,11 @@ class ProcessManager {
     session.stoppedAt = Date.now();
     this.writeState(session).catch(() => {});
     this.releaseLock().catch(() => {});
+    if (this.onSessionFinished) {
+      this.onSessionFinished(session).catch((err) => {
+        this.logger('Session finish handler failed', err.message);
+      });
+    }
   }
 
   async defaultEnsureUploadsDir() {
@@ -297,6 +306,7 @@ class ProcessManager {
       videoFile: session.videoFile,
       videoPath: session.videoPath,
       metaPath: session.metaPath,
+      metaRawPath: session.metaRawPath,
     };
     await fsp.writeFile(session.statePath, JSON.stringify(payload, null, 2));
   }

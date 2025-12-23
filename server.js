@@ -6,7 +6,13 @@ const express = require('express');
 const cors = require('cors');
 const { ProcessManager } = require('./src/session/ProcessManager');
 const { buildGstLaunchArgs } = require('./src/session/gstPipeline');
-const { readTail, parseTailFrames } = require('./src/session/tailParser');
+const {
+  readTail,
+  parseTailFrames,
+  parseFramesFromText,
+  normalizeFrame,
+} = require('./src/session/tailParser');
+const { normalizeMetaFile } = require('./src/session/metaNormalizer');
 let AutoRecordManager;
 let RecorderController;
 
@@ -41,7 +47,7 @@ const SESSION_DEFAULTS = {
   height: 1088,
   fps: 60,
 };
-const SESSION_META_DIR = '/tmp';
+const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DIR) : '/tmp';
 const SESSION_STATE_DIR = '/tmp';
 const SESSION_LOCK_FILE = '/tmp/session.lock';
 const SESSION_MAX_TAIL_FRAMES = 200;
@@ -89,8 +95,11 @@ const sessionManager = new ProcessManager({
   gstLaunchCmd: SESSION_GST_CMD,
   libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
   buildGstArgs: buildGstLaunchArgs,
-  ensureUploadsDir,
+  ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
+  onSessionFinished: async (session) => {
+    await finalizeSessionMeta(session);
+  },
 });
 sessionManager.registerSignalHandlers();
 
@@ -261,6 +270,39 @@ app.get('/api/session/:jobId/status', (req, res) => {
   res.json({ ok: true, jobId, ...status });
 });
 
+app.get('/api/session/:jobId/meta', async (req, res) => {
+  const jobId = req.params.jobId;
+  const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
+  const metaRawPath = `${metaPath}.raw`;
+  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+
+  try {
+    const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
+    const raw = await fsp.readFile(targetPath, 'utf8');
+    let frames = [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        frames = parsed;
+      } else if (Array.isArray(parsed.frames)) {
+        frames = parsed.frames;
+      }
+    } catch (_) {
+      // fall back to best-effort extraction
+    }
+
+    if (!frames.length) {
+      frames = parseFramesFromText(raw);
+    } else {
+      frames = frames.map(normalizeFrame);
+    }
+    frames = applyLabelMap(frames, labelMap).filter((frame) => frame.t !== null || frame.detections.length);
+    res.json({ ok: true, jobId, metaPath, frames });
+  } catch (err) {
+    res.status(404).json({ ok: false, error: err.message, metaPath, frames: [] });
+  }
+});
+
 app.get('/api/session/:jobId/live', async (req, res) => {
   const jobId = req.params.jobId;
   const tailFrames = clamp(
@@ -269,11 +311,14 @@ app.get('/api/session/:jobId/live', async (req, res) => {
     SESSION_MAX_TAIL_FRAMES,
   );
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
+  const metaRawPath = `${metaPath}.raw`;
   const tailBytes = Math.min(512 * 1024, Math.max(16 * 1024, tailFrames * 4096));
+  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
 
   try {
-    const text = await readTail(metaPath, tailBytes);
-    const frames = parseTailFrames(text, tailFrames);
+    const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
+    const text = await readTail(targetPath, tailBytes);
+    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap);
     res.json({ ok: true, jobId, frames });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, frames: [] });
@@ -515,6 +560,43 @@ function authMiddleware(req, res, next) {
   return res.status(401).json({ ok: false, error: 'Unauthorized' });
 }
 
+function parseLabelMap(raw) {
+  if (!raw) return {};
+  const trimmed = String(raw).trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (_) {
+    // fall through to simple format
+  }
+  const map = {};
+  trimmed.split(',').forEach((pair) => {
+    const [key, value] = pair.split(':').map((part) => part.trim());
+    if (!key || !value) return;
+    const idx = Number(key);
+    if (Number.isFinite(idx)) {
+      map[idx] = value;
+    }
+  });
+  return map;
+}
+
+function applyLabelMap(frames, labelMap) {
+  if (!labelMap || !Object.keys(labelMap).length) return frames;
+  return frames.map((frame) => ({
+    ...frame,
+    detections: (frame.detections || []).map((det) => {
+      if (!det) return det;
+      if (det.label && det.label !== 'unknown') return det;
+      if (det.classId !== null && labelMap[det.classId]) {
+        return { ...det, label: labelMap[det.classId] };
+      }
+      return det;
+    }),
+  }));
+}
+
 function parseSessionOptions(body) {
   const width = parsePositiveNumber(body.width, SESSION_DEFAULTS.width);
   const height = parsePositiveNumber(body.height, SESSION_DEFAULTS.height);
@@ -652,6 +734,24 @@ function setStreamingState(active, clients = 0) {
 
 async function ensureUploadsDir() {
   await fsp.mkdir(UPLOAD_DIR, { recursive: true });
+}
+
+async function ensureSessionDirs() {
+  await ensureUploadsDir();
+  await fsp.mkdir(SESSION_META_DIR, { recursive: true });
+}
+
+async function finalizeSessionMeta(session) {
+  if (!session || !session.metaRawPath || !session.metaPath) return;
+  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  try {
+    await normalizeMetaFile(session.metaRawPath, session.metaPath, {
+      jobId: session.jobId,
+      labelMap,
+    });
+  } catch (err) {
+    log('Meta normalization failed', err.message);
+  }
 }
 
 async function isBusy() {

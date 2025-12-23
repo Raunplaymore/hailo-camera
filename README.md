@@ -31,7 +31,6 @@ npm start            # PORT=3001 default
 | `DEFAULT_STILL_DURATION_SEC` | JPG 캡처 기본 길이 (default 1초) |
 | `DEFAULT_VIDEO_DURATION_SEC` | h264/mp4 기본 길이 (default 3초) |
 | `CAMERA_*_CMDS` | rpicam/libcamera 실행 우선순위 |
-| `SESSION_RPICAM_CMD` | 세션 녹화용 rpicam-vid 경로 (default `rpicam-vid`) |
 | `GST_LAUNCH_CMD` | GStreamer 실행 명령 (default `gst-launch-1.0`) |
 | `META_DIR` | 메타 json 경로 (default `/tmp`) |
 | `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
@@ -95,7 +94,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 `GET /api/camera/stream.mjpeg`
 
 - 쿼리: `width`, `height`, `fps` (기본 640×360 @ 15fps)
-- 한 번에 1명만 허용, 토큰이 설정되면 `?token=` 필수
+- 프리뷰는 세션과 동시에 동작하며, 토큰이 설정되면 `?token=` 필수
 - `POST /api/camera/stream/stop` 로 강제 종료 가능
 
 ### 2.3 세션(녹화 + Hailo 추론)
@@ -188,6 +187,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 - `GET /uploads/:name` : 저장 파일 정적 서빙
 - 스모크 테스트: `npm test` 또는 `PORT=3001 node scripts/smoke_test.js`
+- 프리뷰+세션 동시 스모크: `BASE_URL=http://localhost:3001 scripts/smoke.sh`
 
 ---
 
@@ -197,6 +197,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - 명령 타임아웃 = `durationSec*1000 + 3s`
 - 모든 요청·명령 stdout/stderr·에러를 콘솔 로그
 - 스트림 상태(`streamingActive`, `streamClients`, `lastStreamAt`)를 즉시 갱신
+- 프리뷰/세션은 공유 파이프라인을 사용해 동시에 동작하며, 외부 프로세스 점유 시에만 409/503을 반환
 
 ---
 

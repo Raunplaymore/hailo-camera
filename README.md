@@ -31,6 +31,8 @@ npm start            # PORT=3001 default
 | `DEFAULT_STILL_DURATION_SEC` | JPG 캡처 기본 길이 (default 1초) |
 | `DEFAULT_VIDEO_DURATION_SEC` | h264/mp4 기본 길이 (default 3초) |
 | `CAMERA_*_CMDS` | rpicam/libcamera 실행 우선순위 |
+| `SESSION_RPICAM_CMD` | 세션 녹화용 rpicam-vid 경로 (default `rpicam-vid`) |
+| `GST_LAUNCH_CMD` | GStreamer 실행 명령 (default `gst-launch-1.0`) |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
@@ -88,7 +90,64 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - 한 번에 1명만 허용, 토큰이 설정되면 `?token=` 필수
 - `POST /api/camera/stream/stop` 로 강제 종료 가능
 
-### 2.3 Auto Record 데모
+### 2.3 세션(녹화 + Hailo 추론)
+
+`POST /api/session/start`
+
+```json
+{
+  "width": 1456,
+  "height": 1088,
+  "fps": 60,
+  "model": "yolov8s",
+  "durationSec": 0
+}
+```
+
+- `durationSec=0` 이면 `stop` 호출 전까지 계속 진행합니다.
+- `jobId`는 서버에서 생성됩니다.
+- 녹화 파일: `/home/ray/uploads/<jobId>.mp4` (기본값, `UPLOAD_DIR` 설정 시 변경)
+- 메타 파일: `/tmp/<jobId>.meta.json`
+- GStreamer 파이프라인: `libcamerasrc → NV12 → scale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
+  - `hailonet`: `/usr/share/hailo-models/yolov8s_h8.hef`
+  - `hailofilter`: `libyolo_hailortpp_post.so`, function `yolov8s`
+
+응답:
+
+```json
+{
+  "ok": true,
+  "jobId": "session_YYYYMMDD_HHMMSS_mmm_xxxxxx",
+  "videoFile": "<jobId>.mp4",
+  "videoUrl": "/uploads/<jobId>.mp4",
+  "metaPath": "/tmp/<jobId>.meta.json"
+}
+```
+
+`POST /api/session/:jobId/stop`
+
+- rpicam-vid는 `SIGINT`로 종료해 mp4를 finalize 합니다.
+- gst-launch는 `-e` 옵션으로 EOS를 보장합니다.
+
+`GET /api/session/:jobId/status`
+
+`GET /api/session/:jobId/live?tailFrames=30`
+
+- 메타 파일의 끝부분을 읽어 마지막 N프레임 탐지 결과를 반환합니다.
+- 응답 형식:
+
+```json
+{
+  "jobId": "...",
+  "frames": [
+    { "t": 1766..., "frame": 451, "detections":[{"label":"...", "classId":66, "conf":0.87, "bbox":[xmin,ymin,w,h]}] }
+  ]
+}
+```
+
+통합 메모: 세션 종료 후 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4" }` 형태로 후속 분석을 트리거하세요.
+
+### 2.4 Auto Record 데모
 
 `src/auto/*` 에 구현된 `AutoRecordManager`는 데모용 자동 녹화 상태머신(arming → addressLocked → recording → finishLocked → idle)입니다. 서버 시작 시 `ts-node`로 로드되어 있을 때만 활성화되며, 락/스트림 상태를 공유하므로 다른 캡처와 동시에 실행되지 않습니다.
 
@@ -98,7 +157,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 오토 녹화 실패 시 `status.lastError`에 에러 메시지가 들어가며 state가 `failed` 로 고정됩니다. 이때 `start` 를 다시 호출하면 세션이 초기화됩니다.
 
-### 2.4 기타
+### 2.5 기타
 
 - `GET /uploads/:name` : 저장 파일 정적 서빙
 - 스모크 테스트: `npm test` 또는 `PORT=3001 node scripts/smoke_test.js`
@@ -134,6 +193,20 @@ curl -X POST http://localhost:3001/api/camera/capture \
 curl -X POST http://localhost:3001/api/camera/capture-and-analyze \
   -H "Content-Type: application/json" \
   -d '{"format":"mp4","durationSec":5,"force":true}'
+
+# 세션 시작 (녹화 + Hailo 추론)
+curl -X POST http://localhost:3001/api/session/start \
+  -H "Content-Type: application/json" \
+  -d '{"width":1456,"height":1088,"fps":60,"model":"yolov8s","durationSec":0}'
+
+# 세션 상태
+curl -s http://localhost:3001/api/session/<jobId>/status
+
+# 세션 라이브(최근 탐지)
+curl -s "http://localhost:3001/api/session/<jobId>/live?tailFrames=30"
+
+# 세션 종료
+curl -X POST http://localhost:3001/api/session/<jobId>/stop
 
 # 스트림 (토큰 필요 시)
 curl -o stream.mjpeg "http://localhost:3001/api/camera/stream.mjpeg?token=$STREAM_TOKEN"

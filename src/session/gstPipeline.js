@@ -110,7 +110,8 @@ function buildGstShmPreviewArgs(options) {
 }
 
 function buildGstShmRecordArgs(options) {
-  const { socketPath, width, height, fps, outputPath } = options;
+  const { socketPath, width, height, fps, outputPath, encoder } = options;
+  const selectedEncoder = encoder || 'openh264enc';
   return [
     '-e',
     'shmsrc',
@@ -121,7 +122,7 @@ function buildGstShmRecordArgs(options) {
     '!',
     'videoconvert',
     '!',
-    'avenc_h264',
+    selectedEncoder,
     '!',
     'h264parse',
     '!',

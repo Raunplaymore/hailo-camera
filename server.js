@@ -1,7 +1,7 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const { ProcessManager } = require('./src/session/ProcessManager');
@@ -66,6 +66,7 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s_h8.hef';
+const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
   'libcamera-still',
@@ -105,7 +106,8 @@ const sessionManager = new ProcessManager({
   lockFile: SESSION_LOCK_FILE,
   gstLaunchCmd: SESSION_GST_CMD,
   buildGstArgs: buildGstShmInferenceArgs,
-  buildRecordArgs: buildGstShmRecordArgs,
+  buildRecordArgs: (options) =>
+    buildGstShmRecordArgs({ ...options, encoder: SESSION_RECORD_ENCODER }),
   pipeline: sharedPipeline,
   socketPath: SHARED_PIPELINE_SOCKET,
   defaultModelOptions: { hefPath: HAILO_HEF_PATH },
@@ -641,6 +643,28 @@ function buildJobId() {
   )}${pad(now.getMinutes())}${pad(now.getSeconds())}_${pad(now.getMilliseconds(), 3)}`;
   const suffix = Math.random().toString(36).slice(2, 8);
   return `session_${ts}_${suffix}`;
+}
+
+function detectRecordEncoder() {
+  const candidates = ['avenc_h264_omx', 'openh264enc', 'x264enc', 'v4l2h264enc', 'avenc_h264'];
+  for (const candidate of candidates) {
+    if (gstElementAvailable(candidate)) {
+      log(`Record encoder selected: ${candidate}`);
+      return candidate;
+    }
+  }
+  log('No preferred H.264 encoder found; defaulting to openh264enc');
+  return 'openh264enc';
+}
+
+function gstElementAvailable(element) {
+  try {
+    const result = spawnSync('gst-inspect-1.0', [element], { stdio: 'ignore' });
+    return result.status === 0;
+  } catch (err) {
+    log('gst-inspect-1.0 unavailable', err.message);
+    return false;
+  }
 }
 
 async function listSessions({ limit, offset }) {

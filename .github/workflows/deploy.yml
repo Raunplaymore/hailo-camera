@@ -88,7 +88,10 @@ jobs:
           key: ${{ secrets.PI_SSH_KEY }}
           timeout: 120s
           script: |
-            export PATH="$HOME/.nvm/versions/node/v20.19.4/bin:$PATH"
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            nvm use 20.19.4
 
             RELEASES_DIR=~/hailo-camera/releases
             CURRENT_LINK=~/hailo-camera/current

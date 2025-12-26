@@ -152,7 +152,7 @@ function buildSharedPipelineArgs({ width, height, fps, socketPath, shmSize }) {
     'shmsink',
     `socket-path=${socketPath}`,
     `shm-size=${shmSize}`,
-    'wait-for-connection=false',
+    'wait-for-connection=true',
     'sync=false',
   ];
 }

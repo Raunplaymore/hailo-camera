@@ -86,6 +86,7 @@ function buildGstShmPreviewArgs(options) {
   const outFps = fps || srcFps;
 
   return [
+    '-q',
     '-e',
     'shmsrc',
     `socket-path=${socketPath}`,

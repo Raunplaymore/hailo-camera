@@ -163,6 +163,24 @@ app.use((req, _res, next) => {
 
 app.use('/api', authMiddleware);
 
+app.delete('/api/uploads/*', async (req, res) => {
+  const rawPath = req.params[0] || '';
+  const decoded = decodeURIComponent(rawPath);
+  const targetPath = path.resolve(UPLOAD_DIR, decoded);
+  if (!targetPath.startsWith(`${UPLOAD_DIR}${path.sep}`)) {
+    return res.status(400).json({ ok: false, error: 'Invalid upload path' });
+  }
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).json({ ok: false, error: 'File not found' });
+  }
+  try {
+    await fsp.unlink(targetPath);
+    res.json({ ok: true, filename: path.basename(targetPath) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/camera/status', async (_req, res) => {
   const cameraDetected = await detectCamera();
   const busyState = await isBusy();

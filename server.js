@@ -505,9 +505,10 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
-    'Cache-Control': 'no-cache',
-    Connection: 'close',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Connection: 'keep-alive',
     Pragma: 'no-cache',
+    Expires: '0',
   });
   if (typeof res.flushHeaders === 'function') {
     res.flushHeaders();

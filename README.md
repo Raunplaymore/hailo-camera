@@ -9,6 +9,7 @@ rpicam 기반 Raspberry Pi 단일 카메라에서 MJPEG 프리뷰·사진·영�
 ## 1. 환경 & 설치
 
 - Raspberry Pi OS + `rpicam-still`, `rpicam-vid`, `rpicam-hello`
+- GStreamer 1.0 (`gst-launch-1.0`)
 - ffmpeg, Node.js 18+
 
 ```bash
@@ -96,6 +97,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - 쿼리: `width`, `height`, `fps` (기본 640×360 @ 15fps)
 - 프리뷰는 세션과 동시에 동작하며, 토큰이 설정되면 `?token=` 필수
 - `POST /api/camera/stream/stop` 로 강제 종료 가능
+- 프리뷰는 공유 파이프라인을 사용해 세션과 동시에 동작합니다.
 
 ### 2.3 세션(녹화 + Hailo 추론)
 
@@ -115,7 +117,10 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - `jobId`는 서버에서 생성됩니다.
 - 녹화 파일: `/home/ray/uploads/<jobId>.mp4` (기본값, `UPLOAD_DIR` 설정 시 변경)
 - 메타 파일: `META_DIR/<jobId>.meta.json` (default `/tmp`, 세션 종료 시 프레임 배열로 정규화됨)
-- GStreamer 파이프라인: `libcamerasrc → NV12 → scale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
+- GStreamer 파이프라인:
+  - 공유 소스: `libcamerasrc → NV12 → shmsink`
+  - 추론 브랜치: `shmsrc → NV12 → videoconvert → videoscale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
+  - 녹화 브랜치: `shmsrc → NV12 → videoconvert → H.264 encoder → h264parse → mp4mux → filesink(.part)`
   - `hailonet`: `HAILO_HEF_PATH` (default `/usr/share/hailo-models/yolov8s_h8.hef`)
   - `hailofilter`: `libyolo_hailortpp_post.so`, function `yolov8s`
 
@@ -133,8 +138,8 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 `POST /api/session/:jobId/stop`
 
-- rpicam-vid는 `SIGINT`로 종료해 mp4를 finalize 합니다.
 - gst-launch는 `-e` 옵션으로 EOS를 보장합니다.
+- mp4는 `.part`로 기록 후 종료 시 `.mp4`로 rename 됩니다.
 
 `GET /api/session/list?limit=50&offset=0`
 

@@ -63,6 +63,7 @@ const SHARED_PIPELINE_SHM_SIZE = 64 * 1024 * 1024;
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
+// ANALYZE_URL triggers downstream coaching analysis (camera only generates meta).
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s_h8.hef';
@@ -904,8 +905,11 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
       body: JSON.stringify(payload),
     });
     if (!analyzeResp.ok) {
-      const data = await analyzeResp.json().catch(() => ({}));
-      throw new Error(data.error || `Analyze failed with status ${analyzeResp.status}`);
+      const bodyText = await analyzeResp.text().catch(() => '');
+      const snippet = bodyText.trim().slice(0, 500);
+      throw new Error(
+        `Analyze failed with status ${analyzeResp.status}${snippet ? `: ${snippet}` : ''}`,
+      );
     }
   } catch (err) {
     log('Analyze trigger failed', err.message);

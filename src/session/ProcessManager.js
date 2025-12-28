@@ -294,15 +294,21 @@ class ProcessManager {
     session.stoppedAt = Date.now();
     this.writeState(session).catch(() => {});
     this.releaseLock().catch(() => {});
-    this.finalizeVideo(session).catch(() => {});
+    const finalizePromise = this.finalizeVideo(session).catch((err) => {
+      this.logger('Video finalize failed', err.message);
+    });
     if (this.pipeline) {
       this.pipeline.release('session');
     }
-    if (this.onSessionFinished) {
-      this.onSessionFinished(session).catch((err) => {
+    finalizePromise
+      .then(async () => {
+        if (this.onSessionFinished) {
+          await this.onSessionFinished(session);
+        }
+      })
+      .catch((err) => {
         this.logger('Session finish handler failed', err.message);
       });
-    }
   }
 
   async defaultEnsureUploadsDir() {
@@ -328,11 +334,7 @@ class ProcessManager {
 
   async finalizeVideo(session) {
     if (!session.videoPartPath || !session.videoPath) return;
-    try {
-      await fsp.rename(session.videoPartPath, session.videoPath);
-    } catch (err) {
-      this.logger('Video finalize failed', err.message);
-    }
+    await fsp.rename(session.videoPartPath, session.videoPath);
   }
 
   readStateSync(statePath) {

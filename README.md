@@ -26,7 +26,7 @@ npm start            # PORT=3001 default
 | `CORS_ALLOW_ALL` / `CORS_ORIGIN` | CORS 제어 |
 | `UPLOAD_DIR` | 캡처 저장 경로 (default `/home/ray/uploads`) |
 | `STREAM_TOKEN` | `/api/camera/stream.mjpeg` 접근 토큰 (`?token=` / `X-Stream-Token`) |
-| `ANALYZE_URL` | 분석 API (default `http://127.0.0.1:3000/api/analyze/from-file`) |
+| `ANALYZE_URL` | 코칭 분석 트리거 API (default `http://127.0.0.1:3000/api/analyze/from-file`) |
 | `DEFAULT_WIDTH` / `DEFAULT_HEIGHT` | 캡처 기본 해상도 (default 1920×1080) |
 | `DEFAULT_FPS` | JPG/영상 기본 FPS (default 30) |
 | `DEFAULT_STILL_DURATION_SEC` | JPG 캡처 기본 길이 (default 1초) |
@@ -41,7 +41,9 @@ npm start            # PORT=3001 default
 
 mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename합니다. `.part` 파일은 미완성으로 간주하세요.
 
-`ANALYZE_URL`은 캡처+메타 생성 또는 세션 종료 후 백엔드 후속 분석을 트리거하는 용도로 사용됩니다.
+`ANALYZE_URL`은 캡처+메타 생성 또는 세션 종료 후 **코칭 분석**을 트리거하는 용도로 사용됩니다.
+카메라 서버의 `analyze`는 **Hailo 메타 생성**을 의미하며, 스윙 이벤트/코칭 해석은 `ANALYZE_URL` 대상입니다.
+분석 트리거는 **mp4 finalize(.mp4.part → .mp4 rename) 이후**에만 호출됩니다.
 
 > Auto record 데모 기능은 부팅 시 `ts-node/register` 로 TypeScript 파일을 직접 로드합니다. `ts-node` 사용이 어려우면 `npm run build:auto`로 미리 컴파일하거나 해당 기능을 비활성화하세요.
 
@@ -70,7 +72,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 `POST /api/camera/capture-and-analyze`
 
 - 캡처 후 Hailo inference를 수행해 `META_DIR/<base>.meta.json` 생성 (`<base>`는 파일명 확장자 제거)
-- 완료 후 `ANALYZE_URL`로 `{ jobId:<base>, filename, metaPath, force? }` 전송 (실패해도 캡처 결과는 유지)
+- 완료 후(메타 생성 + 파일 확정) `ANALYZE_URL`로 `{ jobId:<base>, filename, metaPath, force:false }` 전송 (실패해도 캡처 결과는 유지)
 - 응답: `{ ok:true, filename, url, metaPath }`
 - `analyze`는 메타 생성 의미이며 스윙 이벤트/코칭 해석은 포함하지 않습니다.
 - 메타 포맷은 `/api/session/:jobId/meta` 와 동일합니다.
@@ -140,6 +142,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 - gst-launch는 `-e` 옵션으로 EOS를 보장합니다.
 - mp4는 `.part`로 기록 후 종료 시 `.mp4`로 rename 됩니다.
+- 분석 트리거는 파일 확정 이후에만 호출됩니다.
 
 `GET /api/session/list?limit=50&offset=0`
 
@@ -176,7 +179,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 }
 ```
 
-통합 메모: 세션 종료 시 서버가 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4", metaPath }` 를 전송합니다. (필요 시 백엔드에서 동일 포맷으로 재시도 가능)
+통합 메모: 세션 종료 시 서버가 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4", metaPath, force:false }` 를 전송합니다. (필요 시 백엔드에서 동일 포맷으로 재시도 가능)
 
 ### 2.4 Auto Record 데모
 

@@ -569,6 +569,9 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'Invalid stream token' });
     }
   }
+  if (aiPreviewSessions.size > 0) {
+    return res.status(409).json({ ok: false, error: 'AI stream already active' });
+  }
   const streamOptions = parseStreamOptions(req.query || {});
   const sourceConfig = sharedPipeline.getConfig() || {
     width: SESSION_DEFAULTS.width,

@@ -9,6 +9,7 @@ const {
   buildGstFileArgs,
   buildGstShmInferenceArgs,
   buildGstShmPreviewArgs,
+  buildGstShmAiPreviewArgs,
   buildGstShmRecordArgs,
 } = require('./src/session/gstPipeline');
 const {
@@ -98,7 +99,9 @@ const sharedPipeline = new SharedPipeline({
   logger: (...args) => log(...args),
 });
 const previewSessions = new Map();
+const aiPreviewSessions = new Map();
 let previewSessionCounter = 0;
+let aiPreviewSessionCounter = 0;
 
 const sessionManager = new ProcessManager({
   uploadDir: UPLOAD_DIR,
@@ -502,7 +505,7 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   previewSessions.set(previewId, { proc: previewProc, res });
-  setStreamingState(true, previewSessions.size);
+  setStreamingState(true, previewSessions.size + aiPreviewSessions.size);
 
   res.writeHead(200, {
     'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
@@ -519,7 +522,10 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     if (!previewSessions.has(previewId)) return;
     previewSessions.delete(previewId);
     sharedPipeline.release('preview');
-    setStreamingState(previewSessions.size > 0, previewSessions.size);
+    setStreamingState(
+      previewSessions.size + aiPreviewSessions.size > 0,
+      previewSessions.size + aiPreviewSessions.size,
+    );
     log(`MJPEG stream cleanup (${reason})`);
     if (previewProc && previewProc.exitCode === null) {
       previewProc.kill('SIGINT');
@@ -556,7 +562,98 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
   });
 });
 
+app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
+  if (STREAM_TOKEN) {
+    const token = req.query.token || req.headers['x-stream-token'];
+    if (!token || token !== STREAM_TOKEN) {
+      return res.status(401).json({ ok: false, error: 'Invalid stream token' });
+    }
+  }
+  const streamOptions = parseStreamOptions(req.query || {});
+  const sourceConfig = sharedPipeline.getConfig() || {
+    width: SESSION_DEFAULTS.width,
+    height: SESSION_DEFAULTS.height,
+    fps: SESSION_DEFAULTS.fps,
+  };
+
+  try {
+    await sharedPipeline.retain('ai-preview', sourceConfig);
+  } catch (err) {
+    const status = err.status || 503;
+    return res.status(status).json({ ok: false, error: err.message });
+  }
+
+  const previewId = ++aiPreviewSessionCounter;
+  const previewArgs = buildGstShmAiPreviewArgs({
+    socketPath: SHARED_PIPELINE_SOCKET,
+    srcWidth: sourceConfig.width,
+    srcHeight: sourceConfig.height,
+    srcFps: sourceConfig.fps,
+    width: streamOptions.width,
+    height: streamOptions.height,
+    fps: streamOptions.fps,
+    model: 'yolov8s',
+    modelOptions: { hefPath: HAILO_HEF_PATH },
+  });
+  const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+  aiPreviewSessions.set(previewId, { proc: previewProc, res });
+  setStreamingState(true, previewSessions.size + aiPreviewSessions.size);
+
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    Connection: 'keep-alive',
+    Pragma: 'no-cache',
+    Expires: '0',
+  });
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  const cleanup = (reason) => {
+    if (!aiPreviewSessions.has(previewId)) return;
+    aiPreviewSessions.delete(previewId);
+    sharedPipeline.release('ai-preview');
+    setStreamingState(previewSessions.size + aiPreviewSessions.size > 0, previewSessions.size + aiPreviewSessions.size);
+    log(`AI MJPEG stream cleanup (${reason})`);
+    if (previewProc && previewProc.exitCode === null) {
+      previewProc.kill('SIGINT');
+    }
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  previewProc.stdout.on('data', (chunk) => {
+    if (!res.writableEnded) {
+      res.write(chunk);
+    }
+  });
+  previewProc.stderr.on('data', (data) => {
+    log('ai preview stderr:', data.toString());
+  });
+  previewProc.on('error', (err) => {
+    log('ai preview process error:', err.message);
+    cleanup('preview_error');
+  });
+  previewProc.on('close', (code, signal) => {
+    log('ai preview process closed', code, signal || '');
+    cleanup('preview_close');
+  });
+
+  const onClientClose = () => cleanup('client_disconnect');
+  req.on('close', onClientClose);
+  res.on('close', () => cleanup('response_close'));
+  res.on('finish', () => cleanup('response_finish'));
+  res.on('error', (err) => {
+    log('ai stream response error:', err.message);
+    cleanup('response_error');
+  });
+});
+
 app.post('/api/camera/stream/stop', (_req, res) => {
+  const hadPreview = previewSessions.size > 0;
+  const hadAiPreview = aiPreviewSessions.size > 0;
   if (previewSessions.size > 0) {
     const count = previewSessions.size;
     for (const [id, session] of previewSessions.entries()) {
@@ -571,10 +668,29 @@ app.post('/api/camera/stream/stop', (_req, res) => {
     for (let i = 0; i < count; i += 1) {
       sharedPipeline.release('preview');
     }
-    setStreamingState(false, 0);
-    return res.json({ ok: true, stopped: true });
   }
-  return res.json({ ok: true, stopped: false });
+
+  if (aiPreviewSessions.size > 0) {
+    const count = aiPreviewSessions.size;
+    for (const [id, session] of aiPreviewSessions.entries()) {
+      if (session && session.proc && session.proc.exitCode === null) {
+        session.proc.kill('SIGINT');
+      }
+      if (session && session.res && !session.res.writableEnded) {
+        session.res.end();
+      }
+      aiPreviewSessions.delete(id);
+    }
+    for (let i = 0; i < count; i += 1) {
+      sharedPipeline.release('ai-preview');
+    }
+  }
+  setStreamingState(
+    previewSessions.size + aiPreviewSessions.size > 0,
+    previewSessions.size + aiPreviewSessions.size,
+  );
+  const stopped = hadPreview || hadAiPreview;
+  return res.json({ ok: true, stopped });
 });
 
 app.use((err, _req, res, _next) => {

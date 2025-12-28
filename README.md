@@ -101,6 +101,14 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - `POST /api/camera/stream/stop` 로 강제 종료 가능
 - 프리뷰는 공유 파이프라인을 사용해 세션과 동시에 동작합니다.
 
+`GET /api/camera/stream.ai.mjpeg`
+
+- 쿼리: `width`, `height`, `fps` (기본 640×360 @ 15fps)
+- Hailo 추론 결과를 오버레이한 MJPEG 스트림입니다.
+- 기본 모델: `yolov8s` (Hailo HEF: `HAILO_HEF_PATH`)
+- 필요 플러그인: `hailonet`, `hailofilter`, `hailooverlay`
+- 토큰이 설정되면 `?token=` 또는 `X-Stream-Token` 필요
+
 ### 2.3 세션(녹화 + Hailo 추론)
 
 `POST /api/session/start`

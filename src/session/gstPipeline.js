@@ -112,6 +112,55 @@ function buildGstShmPreviewArgs(options) {
   ];
 }
 
+function buildGstShmAiPreviewArgs(options) {
+  const { socketPath, srcWidth, srcHeight, srcFps, width, height, fps } = options;
+  const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const outWidth = width || srcWidth;
+  const outHeight = height || srcHeight;
+  const outFps = fps || srcFps;
+
+  return [
+    '-q',
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'is-live=true',
+    'do-timestamp=true',
+    '!',
+    `video/x-raw,width=${srcWidth},height=${srcHeight},format=NV12,framerate=${srcFps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
+    '!',
+    'hailonet',
+    `hef-path=${modelOptions.hefPath}`,
+    '!',
+    'hailofilter',
+    `so-path=${modelOptions.postProcessLib}`,
+    `function-name=${modelOptions.postProcessFunc}`,
+    '!',
+    'hailooverlay',
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    'videorate',
+    '!',
+    `video/x-raw,width=${outWidth},height=${outHeight},framerate=${outFps}/1`,
+    '!',
+    'jpegenc',
+    '!',
+    'multipartmux',
+    'boundary=ffmpeg',
+    '!',
+    'fdsink',
+  ];
+}
+
 function buildGstShmRecordArgs(options) {
   const { socketPath, width, height, fps, outputPath, encoder } = options;
   const selectedEncoder = encoder || 'openh264enc';
@@ -203,6 +252,7 @@ module.exports = {
   buildGstFileArgs,
   buildGstShmInferenceArgs,
   buildGstShmPreviewArgs,
+  buildGstShmAiPreviewArgs,
   buildGstShmRecordArgs,
   resolveModelOptions,
 };

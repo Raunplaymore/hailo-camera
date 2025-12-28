@@ -17,7 +17,7 @@ module.exports = {
         DEFAULT_STILL_DURATION_SEC: process.env.DEFAULT_STILL_DURATION_SEC || '',
         DEFAULT_VIDEO_DURATION_SEC: process.env.DEFAULT_VIDEO_DURATION_SEC || '',
         GST_PLUGIN_PATH: "/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
-        LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes",     
+        LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes:/usr/lib/aarch64-linux-gnu:/usr/lib",
       },
     },
   ],

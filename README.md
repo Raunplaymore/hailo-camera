@@ -35,7 +35,7 @@ npm start            # PORT=3001 default
 | `GST_LAUNCH_CMD` | GStreamer 실행 명령 (default `gst-launch-1.0`) |
 | `META_DIR` | 메타 json 경로 (default `/tmp`) |
 | `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
-| `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s_h8.hef`) |
+| `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s.hef`) |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
@@ -131,7 +131,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
   - 공유 소스: `libcamerasrc → NV12 → shmsink`
   - 추론 브랜치: `shmsrc → NV12 → videoconvert → videoscale → RGB(640×640) → hailonet → hailofilter → hailoexportfile → fakesink`
   - 녹화 브랜치: `shmsrc → NV12 → videoconvert → H.264 encoder → h264parse → mp4mux → filesink(.part)`
-  - `hailonet`: `HAILO_HEF_PATH` (default `/usr/share/hailo-models/yolov8s_h8.hef`)
+  - `hailonet`: `HAILO_HEF_PATH` (default `/usr/share/hailo-models/yolov8s.hef`)
   - `hailofilter`: `libyolo_hailortpp_post.so`, function `yolov8s`
 
 응답:

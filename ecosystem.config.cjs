@@ -16,6 +16,7 @@ module.exports = {
         DEFAULT_FPS: process.env.DEFAULT_FPS || '',
         DEFAULT_STILL_DURATION_SEC: process.env.DEFAULT_STILL_DURATION_SEC || '',
         DEFAULT_VIDEO_DURATION_SEC: process.env.DEFAULT_VIDEO_DURATION_SEC || '',
+        HAILO_HEF_PATH: "/usr/share/hailo-models/yolov8s.hef",
         GST_PLUGIN_PATH: "/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
         LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes:/usr/lib/aarch64-linux-gnu:/usr/lib",
       },

@@ -1,7 +1,7 @@
 const DEFAULTS = {
   inferenceWidth: 640,
   inferenceHeight: 640,
-  hefPath: '/usr/share/hailo-models/yolov8s_h8.hef',
+  hefPath: '/usr/share/hailo-models/yolov8s.hef',
   postProcessLib: 'libyolo_hailortpp_post.so',
   postProcessFunc: 'yolov8s',
 };

@@ -67,7 +67,7 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 // ANALYZE_URL triggers downstream coaching analysis (camera only generates meta).
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
-const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s_h8.hef';
+const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s.hef';
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',

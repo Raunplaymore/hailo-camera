@@ -36,6 +36,7 @@ jobs:
           tar czf release-${RELEASE_NAME}.tar.gz \
             server.js \
             src \
+            config \
             tsconfig.json \
             package.json \
             package-lock.json \

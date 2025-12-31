@@ -68,6 +68,8 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s.hef';
+const AI_POSTPROCESS_CONFIG = process.env.AI_POSTPROCESS_CONFIG
+  || path.join(__dirname, 'config', 'yolov8s_nms.json');
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
@@ -596,7 +598,11 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     height: streamOptions.height,
     fps: streamOptions.fps,
     model: 'yolov8s',
-    modelOptions: { hefPath: HAILO_HEF_PATH },
+    modelOptions: {
+      hefPath: HAILO_HEF_PATH,
+      postProcessFunc: 'filter',
+      postProcessConfig: AI_POSTPROCESS_CONFIG,
+    },
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   aiPreviewSessions.set(previewId, { proc: previewProc, res });

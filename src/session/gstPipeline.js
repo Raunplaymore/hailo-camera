@@ -17,6 +17,7 @@ function resolveModelOptions(model, overrides = {}) {
 function buildGstLaunchArgs(options) {
   const { width, height, fps, metaPath } = options;
   const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const postProcessConfig = modelOptions.postProcessConfig;
 
   return [
     '-e',
@@ -36,6 +37,7 @@ function buildGstLaunchArgs(options) {
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
     `function-name=${modelOptions.postProcessFunc}`,
+    ...(postProcessConfig ? [`config-path=${postProcessConfig}`] : []),
     '!',
     'hailoexportfile',
     `location=${metaPath}`,
@@ -48,6 +50,7 @@ function buildGstLaunchArgs(options) {
 function buildGstShmInferenceArgs(options) {
   const { socketPath, width, height, fps, metaPath } = options;
   const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const postProcessConfig = modelOptions.postProcessConfig;
 
   return [
     '-e',
@@ -70,6 +73,7 @@ function buildGstShmInferenceArgs(options) {
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
     `function-name=${modelOptions.postProcessFunc}`,
+    ...(postProcessConfig ? [`config-path=${postProcessConfig}`] : []),
     '!',
     'hailoexportfile',
     `location=${metaPath}`,
@@ -115,6 +119,7 @@ function buildGstShmPreviewArgs(options) {
 function buildGstShmAiPreviewArgs(options) {
   const { socketPath, srcWidth, srcHeight, srcFps, width, height, fps } = options;
   const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const postProcessConfig = modelOptions.postProcessConfig;
   const outWidth = width || srcWidth;
   const outHeight = height || srcHeight;
   const outFps = fps || srcFps;
@@ -141,6 +146,7 @@ function buildGstShmAiPreviewArgs(options) {
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
     `function-name=${modelOptions.postProcessFunc}`,
+    ...(postProcessConfig ? [`config-path=${postProcessConfig}`] : []),
     '!',
     'hailooverlay',
     '!',
@@ -190,6 +196,7 @@ function buildGstShmRecordArgs(options) {
 function buildGstFileArgs(options) {
   const { inputPath, format, metaPath } = options;
   const modelOptions = resolveModelOptions(options.model, options.modelOptions);
+  const postProcessConfig = modelOptions.postProcessConfig;
   const sourceArgs = buildFileSourceArgs(format, inputPath);
 
   return [
@@ -208,6 +215,7 @@ function buildGstFileArgs(options) {
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
     `function-name=${modelOptions.postProcessFunc}`,
+    ...(postProcessConfig ? [`config-path=${postProcessConfig}`] : []),
     '!',
     'hailoexportfile',
     `location=${metaPath}`,

@@ -16,14 +16,18 @@ export interface AutoRecordStatus {
 }
 
 export interface AutoRecordConfig {
-  demoArmingMs: number;
-  demoAddressToRecordMs: number;
-  demoRecordingMs: number;
-  demoFinishMs: number;
+  addressStillMs: number;
+  addressMaxCenterDeltaPx: number;
+  addressMaxAreaDeltaRatio: number;
+  minPersonConfidence: number;
+  swingEndMissingFrames: number;
+  pollIntervalMs: number;
 }
 
 export interface AutoRecordManagerOptions {
   recorder: RecorderAdapter;
+  detector: DetectorAdapter;
+  config?: Partial<AutoRecordConfig>;
   logger?: (...args: unknown[]) => void;
 }
 
@@ -31,6 +35,24 @@ export interface RecorderAdapter {
   startRecording(): Promise<{ filename: string }>;
   stopRecording(): Promise<{ filename: string }>;
   isRecording(): boolean;
+}
+
+export type DetectionBox = {
+  label?: string | null;
+  classId?: number | null;
+  conf?: number | null;
+  bbox: [number, number, number, number];
+};
+
+export type AutoRecordFrame = {
+  t?: number | null;
+  detections: DetectionBox[];
+};
+
+export interface DetectorAdapter {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  getLatestFrame(): Promise<AutoRecordFrame | null>;
 }
 
 export interface RecorderControllerOptions {

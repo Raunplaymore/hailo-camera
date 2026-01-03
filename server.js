@@ -102,6 +102,15 @@ let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
 
+const AUTO_RECORD_CONFIG = {
+  addressStillMs: parseInt(process.env.AUTO_ADDRESS_STILL_MS, 10) || 2000,
+  addressMaxCenterDeltaPx: parseFloat(process.env.AUTO_ADDRESS_MAX_CENTER_PX) || 14,
+  addressMaxAreaDeltaRatio: parseFloat(process.env.AUTO_ADDRESS_MAX_AREA_RATIO) || 0.12,
+  minPersonConfidence: parseFloat(process.env.AUTO_PERSON_CONF) || 0.2,
+  swingEndMissingFrames: parseInt(process.env.AUTO_SWING_END_MISSING_FRAMES, 10) || 12,
+  pollIntervalMs: parseInt(process.env.AUTO_POLL_MS, 10) || 200,
+};
+
 // 카메라 공유 파이프라인(shm) 관리
 const sharedPipeline = new SharedPipeline({
   gstCmd: SESSION_GST_CMD,
@@ -135,6 +144,73 @@ const sessionManager = new ProcessManager({
 });
 sessionManager.registerSignalHandlers();
 
+class AutoRecordDetector {
+  constructor(options) {
+    this.gstCmd = options.gstCmd;
+    this.pipeline = options.pipeline;
+    this.socketPath = options.socketPath;
+    this.sourceConfig = options.sourceConfig;
+    this.metaPath = options.metaPath;
+    this.modelOptionsProvider = options.modelOptionsProvider;
+    this.labelMapProvider = options.labelMapProvider;
+    this.logger = options.logger || (() => {});
+    this.proc = null;
+    this.retained = false;
+  }
+
+  async start() {
+    if (this.proc) return;
+    await this.pipeline.retain('auto-record', this.sourceConfig);
+    this.retained = true;
+    await fsp.unlink(this.metaPath).catch(() => undefined);
+    const modelOptions = this.modelOptionsProvider();
+    const args = buildGstShmInferenceArgs({
+      socketPath: this.socketPath,
+      width: this.sourceConfig.width,
+      height: this.sourceConfig.height,
+      fps: this.sourceConfig.fps,
+      metaPath: this.metaPath,
+      model: 'yolov8s',
+      modelOptions,
+    });
+    this.logger('AutoRecord detector start', `${this.gstCmd} ${args.join(' ')}`);
+    const child = spawn(this.gstCmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stderr?.on('data', (data) => this.logger('[auto-detect] stderr', data.toString().trim()));
+    child.on('error', (err) => {
+      this.logger('[auto-detect] error', err.message);
+    });
+    child.on('close', (code, signal) => {
+      this.logger('[auto-detect] closed', code, signal || '');
+      this.proc = null;
+    });
+    this.proc = child;
+  }
+
+  async stop() {
+    if (this.proc && this.proc.exitCode === null) {
+      this.proc.kill('SIGINT');
+    }
+    this.proc = null;
+    if (this.retained) {
+      this.pipeline.release('auto-record');
+      this.retained = false;
+    }
+  }
+
+  async getLatestFrame() {
+    const tailBytes = 128 * 1024;
+    try {
+      const text = await readTail(this.metaPath, tailBytes);
+      const frames = parseTailFrames(text, 5);
+      const labelMap = this.labelMapProvider ? this.labelMapProvider() : {};
+      const normalized = applyLabelMap(frames, labelMap);
+      return normalized.length ? normalized[normalized.length - 1] : null;
+    } catch (err) {
+      return null;
+    }
+  }
+}
+
 if (tsNodeRegistered && AutoRecordManager && RecorderController) {
   try {
     autoRecordManager = new AutoRecordManager({
@@ -151,6 +227,24 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         buildFilename: () => buildDefaultFilename({ format: 'mp4' }),
         logger: (...args) => log(...args),
       }),
+      detector: new AutoRecordDetector({
+        gstCmd: SESSION_GST_CMD,
+        pipeline: sharedPipeline,
+        socketPath: SHARED_PIPELINE_SOCKET,
+        sourceConfig: {
+          width: SESSION_DEFAULTS.width,
+          height: SESSION_DEFAULTS.height,
+          fps: SESSION_DEFAULTS.fps,
+        },
+        metaPath: path.join(SESSION_META_DIR, 'auto_record.meta.json'),
+        modelOptionsProvider: () => ({
+          hefPath: HAILO_HEF_PATH,
+          postProcessConfig: aiPostprocessConfig,
+        }),
+        labelMapProvider: () => parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
+        logger: (...args) => log(...args),
+      }),
+      config: AUTO_RECORD_CONFIG,
       logger: (...args) => log(...args),
     });
   } catch (err) {

@@ -3,14 +3,18 @@ import {
   AutoRecordManagerOptions,
   AutoRecordState,
   AutoRecordStatus,
+  AutoRecordFrame,
+  DetectionBox,
   RecorderAdapter,
 } from './types';
 
 const DEFAULT_CONFIG: AutoRecordConfig = {
-  demoArmingMs: 2000,
-  demoAddressToRecordMs: 2000,
-  demoRecordingMs: 3000,
-  demoFinishMs: 1000,
+  addressStillMs: 2000,
+  addressMaxCenterDeltaPx: 14,
+  addressMaxAreaDeltaRatio: 0.12,
+  minPersonConfidence: 0.2,
+  swingEndMissingFrames: 12,
+  pollIntervalMs: 200,
 };
 
 const createError = (message: string, status = 500) => {
@@ -28,10 +32,20 @@ export class AutoRecordManager {
   private config: AutoRecordConfig = { ...DEFAULT_CONFIG };
   private logger?: (...args: unknown[]) => void;
   private recorder: RecorderAdapter;
+  private detector: AutoRecordManagerOptions['detector'];
+  private pollHandle: NodeJS.Timeout | null = null;
+  private lastFrameTs: number | null = null;
+  private stableStartTs: number | null = null;
+  private stableRefBox: DetectionBox | null = null;
+  private missingPersonFrames = 0;
 
   constructor(options: AutoRecordManagerOptions) {
     this.recorder = options.recorder;
+    this.detector = options.detector;
     this.logger = options.logger;
+    if (options.config) {
+      this.config = { ...this.config, ...options.config };
+    }
   }
 
   isActive() {
@@ -43,11 +57,13 @@ export class AutoRecordManager {
       throw createError('Auto record already running', 409);
     }
     this.clearTimers();
+    await this.detector.start();
     this.lastError = null;
     this.startedAt = new Date().toISOString();
     this.recordingFilename = null;
+    this.resetDetectionState();
     this.transitionTo('arming');
-    this.schedule(() => this.enterAddressLocked(), this.config.demoArmingMs);
+    this.startPolling();
     return this.getStatus();
   }
 
@@ -57,6 +73,7 @@ export class AutoRecordManager {
     if (this.state === 'recording' || this.state === 'finishLocked' || this.state === 'stopping') {
       await this.safeStopRecorder().catch((err) => this.fail(err as Error));
     }
+    await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
     this.resetSession();
     return this.getStatus();
   }
@@ -74,9 +91,7 @@ export class AutoRecordManager {
   private enterAddressLocked() {
     if (this.state !== 'arming') return;
     this.transitionTo('addressLocked');
-    this.schedule(() => {
-      this.transitionToRecording().catch((err) => this.fail(err));
-    }, this.config.demoAddressToRecordMs);
+    this.transitionToRecording().catch((err) => this.fail(err));
   }
 
   private async transitionToRecording() {
@@ -85,7 +100,7 @@ export class AutoRecordManager {
       const { filename } = await this.recorder.startRecording();
       this.recordingFilename = filename;
       this.transitionTo('recording');
-      this.schedule(() => this.enterFinishLocked(), this.config.demoRecordingMs);
+      this.missingPersonFrames = 0;
     } catch (err) {
       this.fail(err as Error);
     }
@@ -94,15 +109,14 @@ export class AutoRecordManager {
   private enterFinishLocked() {
     if (this.state !== 'recording') return;
     this.transitionTo('finishLocked');
-    this.schedule(() => {
-      this.handleStopSequence().catch((err) => this.fail(err));
-    }, this.config.demoFinishMs);
+    this.handleStopSequence().catch((err) => this.fail(err));
   }
 
   private async handleStopSequence() {
     if (this.state !== 'finishLocked' && this.state !== 'recording') return;
     this.transitionTo('stopping');
     await this.safeStopRecorder().catch((err) => this.fail(err as Error));
+    await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
     this.resetSession();
   }
 
@@ -133,6 +147,10 @@ export class AutoRecordManager {
   private clearTimers() {
     this.timers.forEach((t) => clearTimeout(t));
     this.timers = [];
+    if (this.pollHandle) {
+      clearTimeout(this.pollHandle);
+      this.pollHandle = null;
+    }
   }
 
   private resetSession(resetState = true) {
@@ -141,6 +159,114 @@ export class AutoRecordManager {
     }
     this.startedAt = null;
     this.recordingFilename = null;
+    this.resetDetectionState();
+  }
+
+  private resetDetectionState() {
+    this.lastFrameTs = null;
+    this.stableStartTs = null;
+    this.stableRefBox = null;
+    this.missingPersonFrames = 0;
+  }
+
+  private startPolling() {
+    const tick = async () => {
+      if (this.state === 'idle' || this.state === 'failed') return;
+      try {
+        await this.handleDetectionTick();
+      } catch (err) {
+        this.log('Detection tick failed', (err as Error).message);
+      } finally {
+        if (this.state !== 'idle' && this.state !== 'failed') {
+          this.pollHandle = setTimeout(tick, this.config.pollIntervalMs);
+        }
+      }
+    };
+    this.pollHandle = setTimeout(tick, this.config.pollIntervalMs);
+  }
+
+  private async handleDetectionTick() {
+    const frame = await this.detector.getLatestFrame();
+    if (!frame) {
+      if (this.state === 'recording') {
+        this.missingPersonFrames += 1;
+        if (this.missingPersonFrames >= this.config.swingEndMissingFrames) {
+          this.enterFinishLocked();
+        }
+      }
+      return;
+    }
+    const frameTs = frame.t ?? null;
+    if (frameTs !== null && this.lastFrameTs === frameTs) {
+      return;
+    }
+    this.lastFrameTs = frameTs;
+
+    const person = this.findPerson(frame);
+    if (!person) {
+      this.missingPersonFrames += 1;
+      this.stableStartTs = null;
+      this.stableRefBox = null;
+      if (this.state === 'recording' && this.missingPersonFrames >= this.config.swingEndMissingFrames) {
+        this.enterFinishLocked();
+      }
+      return;
+    }
+
+    this.missingPersonFrames = 0;
+    if (this.state === 'arming') {
+      if (this.isStableAddress(person, frameTs)) {
+        this.enterAddressLocked();
+      }
+    }
+  }
+
+  private findPerson(frame: AutoRecordFrame) {
+    const detections = frame.detections || [];
+    const minConf = this.config.minPersonConfidence;
+    const person = detections.find((det) => {
+      if (!det) return false;
+      if (det.conf !== null && det.conf !== undefined && det.conf < minConf) return false;
+      if (det.label && det.label.toLowerCase() === 'person') return true;
+      if (det.classId !== null && det.classId !== undefined) {
+        return Number(det.classId) === 1 || Number(det.classId) === 0;
+      }
+      return false;
+    });
+    return person || null;
+  }
+
+  private isStableAddress(det: DetectionBox, frameTs: number | null) {
+    const [x, y, w, h] = det.bbox;
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const area = w * h;
+    if (!this.stableRefBox) {
+      this.stableRefBox = det;
+      this.stableStartTs = frameTs ?? Date.now();
+      return false;
+    }
+
+    const [px, py, pw, ph] = this.stableRefBox.bbox;
+    const prevCenterX = px + pw / 2;
+    const prevCenterY = py + ph / 2;
+    const prevArea = pw * ph;
+    const centerDelta = Math.hypot(centerX - prevCenterX, centerY - prevCenterY);
+    const areaDeltaRatio = prevArea > 0 ? Math.abs(area - prevArea) / prevArea : 0;
+    const isStable =
+      centerDelta <= this.config.addressMaxCenterDeltaPx &&
+      areaDeltaRatio <= this.config.addressMaxAreaDeltaRatio;
+    if (!isStable) {
+      this.stableRefBox = det;
+      this.stableStartTs = frameTs ?? Date.now();
+      return false;
+    }
+    const startTs = this.stableStartTs ?? (frameTs ?? Date.now());
+    const currentTs = frameTs ?? Date.now();
+    if (currentTs - startTs >= this.config.addressStillMs) {
+      return true;
+    }
+    return false;
   }
 
   private log(...args: unknown[]) {

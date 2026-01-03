@@ -11,6 +11,8 @@ const {
   buildGstShmPreviewArgs,
   buildGstShmAiPreviewArgs,
   buildGstShmStillArgs,
+  buildGstShmH264Args,
+  buildGstShmMp4Args,
   buildGstShmRecordArgs,
 } = require('./src/session/gstPipeline');
 const {
@@ -382,7 +384,9 @@ app.post('/api/camera/capture', async (req, res) => {
     return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
   }
 
-  const canUseSharedCapture = options.format === 'jpg' && sharedPipeline.isRunning();
+  const canUseSharedCapture = sharedPipeline.isRunning()
+    && streamingActive
+    && ['jpg', 'h264', 'mp4'].includes(options.format);
   if (streamingActive && !canUseSharedCapture) {
     return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
@@ -423,10 +427,13 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
   }
 
-  if (streamingActive) {
+  const canUseSharedCapture = sharedPipeline.isRunning()
+    && streamingActive
+    && ['jpg', 'h264', 'mp4'].includes(options.format);
+  if (streamingActive && !canUseSharedCapture) {
     return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
-  if (sharedPipeline.isRunning()) {
+  if (sharedPipeline.isRunning() && !canUseSharedCapture) {
     return res.status(409).json({ ok: false, error: 'Camera pipeline active' });
   }
 
@@ -438,7 +445,11 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
 
   let filename;
   try {
-    filename = await handleCapture(options, timeouts);
+    if (canUseSharedCapture) {
+      filename = await handleSharedCapture(options, timeouts);
+    } else {
+      filename = await handleCapture(options, timeouts);
+    }
     lastCaptureAt = new Date().toISOString();
     lastError = null;
     const metaBase = deriveMetaBase(filename);
@@ -1171,19 +1182,55 @@ async function handleSharedCapture(options, timeouts) {
     throw err;
   }
   const finalPath = path.join(UPLOAD_DIR, options.filename);
+  const tempPath = `${finalPath}.part`;
   await sharedPipeline.retain('capture', sourceConfig);
   try {
-    await captureStillFromSharedPipeline(
-      {
-        outputPath: finalPath,
-        srcWidth: sourceConfig.width,
-        srcHeight: sourceConfig.height,
-        srcFps: sourceConfig.fps,
-        width: options.width,
-        height: options.height,
-      },
-      timeouts.captureTimeout,
-    );
+    if (options.format === 'jpg') {
+      await captureStillFromSharedPipeline(
+        {
+          outputPath: finalPath,
+          srcWidth: sourceConfig.width,
+          srcHeight: sourceConfig.height,
+          srcFps: sourceConfig.fps,
+          width: options.width,
+          height: options.height,
+        },
+        timeouts.captureTimeout,
+      );
+    } else if (options.format === 'h264') {
+      await captureH264FromSharedPipeline(
+        {
+          outputPath: finalPath,
+          srcWidth: sourceConfig.width,
+          srcHeight: sourceConfig.height,
+          srcFps: sourceConfig.fps,
+          width: options.width,
+          height: options.height,
+          fps: options.fps,
+          durationSec: options.durationSec,
+        },
+        timeouts.captureTimeout,
+      );
+    } else if (options.format === 'mp4') {
+      await captureMp4FromSharedPipeline(
+        {
+          outputPath: tempPath,
+          srcWidth: sourceConfig.width,
+          srcHeight: sourceConfig.height,
+          srcFps: sourceConfig.fps,
+          width: options.width,
+          height: options.height,
+          fps: options.fps,
+          durationSec: options.durationSec,
+        },
+        timeouts.captureTimeout,
+      );
+      await finalizeTempFile(tempPath, finalPath);
+    } else {
+      const err = new Error(`Unsupported format for shared capture: ${options.format}`);
+      err.httpStatus = 400;
+      throw err;
+    }
     return options.filename;
   } finally {
     sharedPipeline.release('capture');
@@ -1214,6 +1261,48 @@ async function captureStillFromSharedPipeline(
     width,
     height,
     outputPath,
+  });
+  logCommand(SESSION_GST_CMD, gstArgs);
+  const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
+  logOutputs(stdout, stderr);
+}
+
+async function captureH264FromSharedPipeline(
+  { outputPath, srcWidth, srcHeight, srcFps, width, height, fps, durationSec },
+  timeoutMs,
+) {
+  const gstArgs = buildGstShmH264Args({
+    socketPath: SHARED_PIPELINE_SOCKET,
+    srcWidth,
+    srcHeight,
+    srcFps,
+    width,
+    height,
+    fps,
+    durationSec,
+    outputPath,
+    encoder: SESSION_RECORD_ENCODER,
+  });
+  logCommand(SESSION_GST_CMD, gstArgs);
+  const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
+  logOutputs(stdout, stderr);
+}
+
+async function captureMp4FromSharedPipeline(
+  { outputPath, srcWidth, srcHeight, srcFps, width, height, fps, durationSec },
+  timeoutMs,
+) {
+  const gstArgs = buildGstShmMp4Args({
+    socketPath: SHARED_PIPELINE_SOCKET,
+    srcWidth,
+    srcHeight,
+    srcFps,
+    width,
+    height,
+    fps,
+    durationSec,
+    outputPath,
+    encoder: SESSION_RECORD_ENCODER,
   });
   logCommand(SESSION_GST_CMD, gstArgs);
   const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);

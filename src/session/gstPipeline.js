@@ -195,6 +195,99 @@ function buildGstShmStillArgs(options) {
   ];
 }
 
+function buildGstShmH264Args(options) {
+  const {
+    socketPath,
+    srcWidth,
+    srcHeight,
+    srcFps,
+    width,
+    height,
+    fps,
+    durationSec,
+    outputPath,
+    encoder,
+  } = options;
+  const outWidth = width || srcWidth;
+  const outHeight = height || srcHeight;
+  const outFps = fps || srcFps;
+  const bufferCount = Math.max(1, Math.round(Math.max(1, durationSec || 1) * outFps));
+
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'is-live=true',
+    'do-timestamp=true',
+    `num-buffers=${bufferCount}`,
+    '!',
+    `video/x-raw,width=${srcWidth},height=${srcHeight},format=NV12,framerate=${srcFps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    'videorate',
+    '!',
+    `video/x-raw,width=${outWidth},height=${outHeight},framerate=${outFps}/1`,
+    '!',
+    encoder || 'openh264enc',
+    '!',
+    'h264parse',
+    '!',
+    'filesink',
+    `location=${outputPath}`,
+  ];
+}
+
+function buildGstShmMp4Args(options) {
+  const {
+    socketPath,
+    srcWidth,
+    srcHeight,
+    srcFps,
+    width,
+    height,
+    fps,
+    durationSec,
+    outputPath,
+    encoder,
+  } = options;
+  const outWidth = width || srcWidth;
+  const outHeight = height || srcHeight;
+  const outFps = fps || srcFps;
+  const bufferCount = Math.max(1, Math.round(Math.max(1, durationSec || 1) * outFps));
+
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'is-live=true',
+    'do-timestamp=true',
+    `num-buffers=${bufferCount}`,
+    '!',
+    `video/x-raw,width=${srcWidth},height=${srcHeight},format=NV12,framerate=${srcFps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    'videorate',
+    '!',
+    `video/x-raw,width=${outWidth},height=${outHeight},framerate=${outFps}/1`,
+    '!',
+    encoder || 'openh264enc',
+    '!',
+    'h264parse',
+    '!',
+    'mp4mux',
+    'faststart=true',
+    '!',
+    'filesink',
+    `location=${outputPath}`,
+  ];
+}
+
 function buildGstShmRecordArgs(options) {
   const { socketPath, width, height, fps, outputPath, encoder } = options;
   const selectedEncoder = encoder || 'openh264enc';
@@ -290,6 +383,8 @@ module.exports = {
   buildGstShmPreviewArgs,
   buildGstShmAiPreviewArgs,
   buildGstShmStillArgs,
+  buildGstShmH264Args,
+  buildGstShmMp4Args,
   buildGstShmRecordArgs,
   resolveModelOptions,
 };

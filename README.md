@@ -36,6 +36,13 @@ npm start            # PORT=3001 default
 | `META_DIR` | 메타 json 경로 (default `/tmp`) |
 | `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
 | `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s.hef`) |
+| `AI_POSTPROCESS_CONFIG` | Hailo postprocess config 경로 (default `config/yolov8s_nms.json`) |
+| `AUTO_ADDRESS_STILL_MS` | 자동 촬영: 어드레스 안정 지속 시간(ms, default `2000`) |
+| `AUTO_ADDRESS_MAX_CENTER_PX` | 자동 촬영: 중심 이동 허용(px, default `14`) |
+| `AUTO_ADDRESS_MAX_AREA_RATIO` | 자동 촬영: bbox 면적 변화 허용 비율(default `0.12`) |
+| `AUTO_PERSON_CONF` | 자동 촬영: person 최소 confidence(default `0.2`) |
+| `AUTO_SWING_END_MISSING_FRAMES` | 자동 촬영: person 미검출 연속 프레임(default `12`) |
+| `AUTO_POLL_MS` | 자동 촬영: 메타 폴링 간격(ms, default `200`) |
 | `LIBAV_VIDEO_CODEC` | rpicam-vid libav 코덱 (default `libx264`) |
 | `VITE_API_BASE_LOCAL / PI` | 프런트 앱 참고 용도 |
 
@@ -189,9 +196,12 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 통합 메모: 세션 종료 시 서버가 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4", metaPath, force:false }` 를 전송합니다. (필요 시 백엔드에서 동일 포맷으로 재시도 가능)
 
-### 2.4 Auto Record 데모
+### 2.4 Auto Record (Ready 기반)
 
-`src/auto/*` 에 구현된 `AutoRecordManager`는 데모용 자동 녹화 상태머신(arming → addressLocked → recording → finishLocked → idle)입니다. 서버 시작 시 `ts-node`로 로드되어 있을 때만 활성화되며, 락/스트림 상태를 공유하므로 다른 캡처와 동시에 실행되지 않습니다.
+`src/auto/*` 의 `AutoRecordManager`는 **Ready 상태에서 사람 안정(어드레스) 감지 후 자동 녹화**를 수행합니다. 서버 시작 시 `ts-node`로 로드되어 있을 때만 활성화되며, 락/스트림 상태를 공유하므로 다른 캡처와 동시에 실행되지 않습니다.
+
+- 어드레스 완료: person bbox가 설정 시간 동안 안정적일 때
+- 종료: person 미검출 연속 프레임 또는 UI Stop
 
 - `GET /api/camera/auto-record/status` : `{ ok, status }` 로 현재 state, `startedAt`, `recordingFilename`, `lastError` 를 확인합니다.
 - `POST /api/camera/auto-record/start` : 스트림/캡처가 진행 중이면 `409` 를 반환합니다. 성공 시 상태머신이 순차적으로 mp4 녹화를 수행합니다.
@@ -199,7 +209,14 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 오토 녹화 실패 시 `status.lastError`에 에러 메시지가 들어가며 state가 `failed` 로 고정됩니다. 이때 `start` 를 다시 호출하면 세션이 초기화됩니다.
 
-### 2.5 기타
+### 2.5 AI postprocess config
+
+- `GET /api/camera/ai-config` : 현재 적용 중인 config와 옵션 목록
+- `POST /api/camera/ai-config` : `{ name: "yolov8s_nms_golf.json" }` 형태로 전환
+- `config/` 아래 json 파일이 옵션 목록에 포함됩니다.
+- 기본 골프 라벨 구성: `config/yolov8s_nms_golf.json`
+
+### 2.6 기타
 
 - `GET /uploads/:name` : 저장 파일 정적 서빙
 - `DELETE /api/uploads/:name` : 저장 파일 삭제 (AUTH_TOKEN 설정 시 Bearer 필요)

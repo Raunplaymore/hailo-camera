@@ -35,8 +35,10 @@ try {
   console.warn('ts-node/register unavailable - auto record disabled', err?.message || err);
 }
 
+// Express API 서버
 const app = express();
 
+// 환경/경로/기본값 설정
 const PORT = parseInt(process.env.PORT, 10) || 3001;
 const UPLOAD_DIR = process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : '/home/ray/uploads';
 const LOCK_FILE = '/tmp/camera.lock';
@@ -64,6 +66,7 @@ const SESSION_MAX_TAIL_FRAMES = 200;
 const SHARED_PIPELINE_SOCKET = '/tmp/hailo_camera.shm';
 const SHARED_PIPELINE_SHM_SIZE = 64 * 1024 * 1024;
 
+// 인증/스트림/모델 설정
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const CORS_ALLOW_ALL = process.env.CORS_ALLOW_ALL === 'true';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
@@ -97,6 +100,7 @@ let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
 
+// 카메라 공유 파이프라인(shm) 관리
 const sharedPipeline = new SharedPipeline({
   gstCmd: SESSION_GST_CMD,
   socketPath: SHARED_PIPELINE_SOCKET,
@@ -108,6 +112,7 @@ const aiPreviewSessions = new Map();
 let previewSessionCounter = 0;
 let aiPreviewSessionCounter = 0;
 
+// 녹화+추론 세션 관리자
 const sessionManager = new ProcessManager({
   uploadDir: UPLOAD_DIR,
   metaDir: SESSION_META_DIR,
@@ -154,6 +159,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
   autoRecordInitError = new Error('ts-node/register unavailable');
 }
 
+// 요청 바디 파서
 app.use(express.json({ limit: '1mb' }));
 
 if (CORS_ALLOW_ALL || CORS_ORIGIN) {
@@ -163,6 +169,7 @@ if (CORS_ALLOW_ALL || CORS_ORIGIN) {
   app.use(cors(corsOptions));
 }
 
+// 업로드 파일 정적 서빙
 app.use('/uploads', express.static(UPLOAD_DIR, { extensions: ['jpg', 'h264', 'mp4'] }));
 
 app.use((req, _res, next) => {
@@ -170,8 +177,10 @@ app.use((req, _res, next) => {
   next();
 });
 
+// API 인증 보호
 app.use('/api', authMiddleware);
 
+// 업로드 파일 삭제
 app.delete('/api/uploads/*', async (req, res) => {
   const rawPath = req.params[0] || '';
   const decoded = decodeURIComponent(rawPath);
@@ -190,6 +199,7 @@ app.delete('/api/uploads/*', async (req, res) => {
   }
 });
 
+// 카메라 상태/헬스 체크
 app.get('/api/camera/status', async (_req, res) => {
   const cameraDetected = await detectCamera();
   const busyState = await isBusy();
@@ -205,6 +215,7 @@ app.get('/api/camera/status', async (_req, res) => {
   });
 });
 
+// 자동 녹화 상태 조회
 app.get('/api/camera/auto-record/status', (_req, res) => {
   try {
     res.json({ ok: true, status: getAutoRecordStatus() });
@@ -218,6 +229,7 @@ app.get('/api/camera/auto-record/status', (_req, res) => {
   }
 });
 
+// 자동 녹화 시작
 app.post('/api/camera/auto-record/start', async (req, res) => {
   const manager = resolveAutoRecordManager(res);
   if (!manager) return;
@@ -237,6 +249,7 @@ app.post('/api/camera/auto-record/start', async (req, res) => {
   }
 });
 
+// 자동 녹화 종료
 app.post('/api/camera/auto-record/stop', async (_req, res) => {
   const manager = resolveAutoRecordManager(res);
   if (!manager) return;
@@ -253,6 +266,7 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   }
 });
 
+// 녹화+추론 세션 시작
 app.post('/api/session/start', async (req, res) => {
   let options;
   try {
@@ -284,6 +298,7 @@ app.post('/api/session/start', async (req, res) => {
   }
 });
 
+// 녹화+추론 세션 종료
 app.post('/api/session/:jobId/stop', async (req, res) => {
   const jobId = req.params.jobId;
   try {
@@ -300,6 +315,7 @@ app.post('/api/session/:jobId/stop', async (req, res) => {
   }
 });
 
+// 세션 목록 조회
 app.get('/api/session/list', async (req, res) => {
   const limit = clamp(parseNonNegativeNumber(req.query.limit, 50), 1, 200);
   const offset = clamp(parseNonNegativeNumber(req.query.offset, 0), 0, 1000);
@@ -312,6 +328,7 @@ app.get('/api/session/list', async (req, res) => {
   }
 });
 
+// 세션 상태 조회
 app.get('/api/session/:jobId/status', (req, res) => {
   const jobId = req.params.jobId;
   const status = sessionManager.getStatus(jobId);
@@ -321,6 +338,7 @@ app.get('/api/session/:jobId/status', (req, res) => {
   res.json({ ok: true, jobId, ...status });
 });
 
+// 세션 메타 전체 조회
 app.get('/api/session/:jobId/meta', async (req, res) => {
   const jobId = req.params.jobId;
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
@@ -354,6 +372,7 @@ app.get('/api/session/:jobId/meta', async (req, res) => {
   }
 });
 
+// 세션 메타 tail 조회
 app.get('/api/session/:jobId/live', async (req, res) => {
   const jobId = req.params.jobId;
   const tailFrames = clamp(
@@ -376,6 +395,7 @@ app.get('/api/session/:jobId/live', async (req, res) => {
   }
 });
 
+// 캡처 (jpg/h264/mp4)
 app.post('/api/camera/capture', async (req, res) => {
   let options;
   try {
@@ -419,6 +439,7 @@ app.post('/api/camera/capture', async (req, res) => {
   }
 });
 
+// 캡처 후 메타 생성 + 분석 트리거
 app.post('/api/camera/capture-and-analyze', async (req, res) => {
   let options;
   try {
@@ -491,6 +512,7 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
   }
 });
 
+// MJPEG 프리뷰 스트림
 app.get('/api/camera/stream.mjpeg', async (req, res) => {
   if (STREAM_TOKEN) {
     const token = req.query.token || req.headers['x-stream-token'];
@@ -581,6 +603,7 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
   });
 });
 
+// AI 오버레이 MJPEG 스트림
 app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
   if (STREAM_TOKEN) {
     const token = req.query.token || req.headers['x-stream-token'];
@@ -677,6 +700,7 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
   });
 });
 
+// 스트림 강제 종료
 app.post('/api/camera/stream/stop', (_req, res) => {
   const hadPreview = previewSessions.size > 0;
   const hadAiPreview = aiPreviewSessions.size > 0;
@@ -719,6 +743,7 @@ app.post('/api/camera/stream/stop', (_req, res) => {
   return res.json({ ok: true, stopped });
 });
 
+// 전역 에러 핸들러
 app.use((err, _req, res, _next) => {
   log('Unhandled error', err.stack || err.message);
   res.status(500).json({ ok: false, error: 'Internal server error' });
@@ -728,6 +753,7 @@ process.on('unhandledRejection', (reason) => {
   log('Unhandled rejection', reason);
 });
 
+// 서버 시작 시 디렉터리 준비 및 리스닝
 (async () => {
   await ensureUploadsDir();
   await cleanupStaleLock();
@@ -736,10 +762,12 @@ process.on('unhandledRejection', (reason) => {
   });
 })();
 
+// 타임스탬프 포함 로깅
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
 
+// Bearer 토큰 인증 미들웨어
 function authMiddleware(req, res, next) {
   if (!AUTH_TOKEN) return next();
   const header = req.headers['authorization'] || '';
@@ -748,6 +776,7 @@ function authMiddleware(req, res, next) {
   return res.status(401).json({ ok: false, error: 'Unauthorized' });
 }
 
+// 라벨 매핑 파서(JSON 또는 "id:label" 문자열)
 function parseLabelMap(raw) {
   if (!raw) return {};
   const trimmed = String(raw).trim();
@@ -770,6 +799,7 @@ function parseLabelMap(raw) {
   return map;
 }
 
+// 탐지 결과에 라벨 매핑 적용
 function applyLabelMap(frames, labelMap) {
   if (!labelMap || !Object.keys(labelMap).length) return frames;
   return frames.map((frame) => ({
@@ -970,6 +1000,7 @@ function parseStreamOptions(query) {
   return { width, height, fps, quality: 5 };
 }
 
+// 스트림 활성 상태/클라이언트 수 갱신
 function setStreamingState(active, clients = 0) {
   streamingActive = Boolean(active);
   streamClients = streamingActive ? Math.max(1, Number(clients) || 1) : 0;
@@ -977,15 +1008,18 @@ function setStreamingState(active, clients = 0) {
   log(`Streaming state -> active=${streamingActive} clients=${streamClients}`);
 }
 
+// 업로드 디렉터리 보장
 async function ensureUploadsDir() {
   await fsp.mkdir(UPLOAD_DIR, { recursive: true });
 }
 
+// 세션 디렉터리 보장
 async function ensureSessionDirs() {
   await ensureUploadsDir();
   await fsp.mkdir(SESSION_META_DIR, { recursive: true });
 }
 
+// 세션 종료 후 메타 정규화 및 분석 트리거
 async function finalizeSessionMeta(session) {
   if (!session || !session.metaRawPath || !session.metaPath) return;
   const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
@@ -1005,6 +1039,7 @@ async function finalizeSessionMeta(session) {
   }
 }
 
+// 파일 기반 Hailo 추론 수행
 async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, durationSec }) {
   const gstArgs = buildGstFileArgs({
     format,
@@ -1019,16 +1054,19 @@ async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, 
   logOutputs(stdout, stderr);
 }
 
+// 분석 타임아웃 계산
 function computeAnalyzeTimeout(format, durationSec) {
   if (format === 'jpg') return 5000;
   const durationMs = Math.max(1, durationSec || 0) * 1000;
   return Math.max(8000, durationMs + COMMAND_GRACE_MS + 4000);
 }
 
+// 파일명에서 jobId 추출
 function deriveMetaBase(filename) {
   return path.basename(filename).replace(/\.[^.]+$/, '');
 }
 
+// 외부 분석 서비스 호출
 async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
   if (!ANALYZE_URL) return;
   const payload = {
@@ -1058,6 +1096,7 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
   }
 }
 
+// 캡처 락 상태 확인
 async function isBusy() {
   if (busy) return true;
   try {
@@ -1070,6 +1109,7 @@ async function isBusy() {
   return true;
 }
 
+// 오래된 락 정리
 async function cleanupStaleLock() {
   try {
     const stat = await fsp.stat(LOCK_FILE);
@@ -1100,6 +1140,7 @@ async function cleanupStaleLock() {
   }
 }
 
+// 캡처 락 획득
 async function tryAcquireLock(expectedMs) {
   await cleanupStaleLock();
   if (busy) return false;
@@ -1127,11 +1168,13 @@ async function tryAcquireLock(expectedMs) {
   }
 }
 
+// 캡처 락 해제
 async function releaseLock() {
   busy = false;
   await fsp.unlink(LOCK_FILE).catch(() => {});
 }
 
+// 캡처/변환 타임아웃 계산
 function computeTimeouts(format, durationSec) {
   const durationMs = Math.max(1, durationSec) * 1000;
   const captureTimeout = durationMs + COMMAND_GRACE_MS + 1000;
@@ -1139,6 +1182,7 @@ function computeTimeouts(format, durationSec) {
   return { captureTimeout, convertTimeout, total: captureTimeout + convertTimeout };
 }
 
+// 기본 캡처 처리 (공유 파이프라인 미사용)
 async function handleCapture(options, timeouts) {
   await ensureUploadsDir();
   const finalPath = path.join(UPLOAD_DIR, options.filename);
@@ -1173,6 +1217,7 @@ async function handleCapture(options, timeouts) {
   return options.filename;
 }
 
+// 공유 파이프라인 기반 캡처 처리
 async function handleSharedCapture(options, timeouts) {
   await ensureUploadsDir();
   const sourceConfig = sharedPipeline.getConfig();
@@ -1237,11 +1282,13 @@ async function handleSharedCapture(options, timeouts) {
   }
 }
 
+// 임시 파일 확정
 async function finalizeTempFile(tempPath, finalPath) {
   if (tempPath === finalPath) return;
   await fsp.rename(tempPath, finalPath);
 }
 
+// rpicam-still 기반 사진 캡처
 async function captureStill({ width, height, durationSec, outputPath }, timeoutMs) {
   const timeout = Math.max(500, durationSec * 1000);
   const args = ['-o', outputPath, '--width', String(width), '--height', String(height), '-t', String(timeout), '-n'];
@@ -1249,6 +1296,7 @@ async function captureStill({ width, height, durationSec, outputPath }, timeoutM
   logOutputs(stdout, stderr);
 }
 
+// 공유 파이프라인에서 1프레임 캡처
 async function captureStillFromSharedPipeline(
   { outputPath, srcWidth, srcHeight, srcFps, width, height },
   timeoutMs,
@@ -1267,6 +1315,7 @@ async function captureStillFromSharedPipeline(
   logOutputs(stdout, stderr);
 }
 
+// 공유 파이프라인에서 h264 캡처
 async function captureH264FromSharedPipeline(
   { outputPath, srcWidth, srcHeight, srcFps, width, height, fps, durationSec },
   timeoutMs,
@@ -1288,6 +1337,7 @@ async function captureH264FromSharedPipeline(
   logOutputs(stdout, stderr);
 }
 
+// 공유 파이프라인에서 mp4 캡처
 async function captureMp4FromSharedPipeline(
   { outputPath, srcWidth, srcHeight, srcFps, width, height, fps, durationSec },
   timeoutMs,
@@ -1309,6 +1359,7 @@ async function captureMp4FromSharedPipeline(
   logOutputs(stdout, stderr);
 }
 
+// rpicam-vid 기반 h264 캡처
 async function captureVideo({ width, height, durationSec, fps, outputPath }, timeoutMs) {
   const duration = Math.max(1, durationSec) * 1000;
   const args = [
@@ -1331,6 +1382,7 @@ async function captureVideo({ width, height, durationSec, fps, outputPath }, tim
   logOutputs(stdout, stderr);
 }
 
+// rpicam-vid libav mp4 캡처 (가능한 경우)
 async function captureMp4Direct({ width, height, durationSec, fps, outputPath }, timeoutMs) {
   const rpicamCommands = VIDEO_COMMANDS.filter((cmd) => cmd.includes('rpicam'));
   if (!rpicamCommands.length) return false;
@@ -1359,6 +1411,7 @@ async function captureMp4Direct({ width, height, durationSec, fps, outputPath },
   return true;
 }
 
+// h264 → mp4 리먹스
 async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {
   const args = [
     '-y',
@@ -1382,6 +1435,7 @@ async function remuxToMp4(inputPath, outputPath, fps, timeoutMs) {
 }
 
 
+// 외부 명령 실행 (타임아웃 포함)
 async function runCommand(command, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });

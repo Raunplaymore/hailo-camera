@@ -74,8 +74,10 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s.hef';
-const AI_POSTPROCESS_CONFIG = process.env.AI_POSTPROCESS_CONFIG
-  || path.join(__dirname, 'config', 'yolov8s_nms.json');
+const AI_CONFIG_DIR = path.join(__dirname, 'config');
+const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
+  || path.join(AI_CONFIG_DIR, 'yolov8s_nms.json');
+let aiPostprocessConfig = DEFAULT_AI_CONFIG;
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
@@ -124,7 +126,7 @@ const sessionManager = new ProcessManager({
     buildGstShmRecordArgs({ ...options, encoder: SESSION_RECORD_ENCODER }),
   pipeline: sharedPipeline,
   socketPath: SHARED_PIPELINE_SOCKET,
-  defaultModelOptions: { hefPath: HAILO_HEF_PATH },
+  defaultModelOptions: { hefPath: HAILO_HEF_PATH, postProcessConfig: aiPostprocessConfig },
   ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
   onSessionFinished: async (session) => {
@@ -263,6 +265,27 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
       error: err.message || 'Failed to stop auto record',
       status: safeManagerStatus(),
     });
+  }
+});
+
+// AI postprocess config 조회
+app.get('/api/camera/ai-config', (_req, res) => {
+  res.json({ ok: true, ...getAiConfigStatus() });
+});
+
+// AI postprocess config 변경
+app.post('/api/camera/ai-config', (req, res) => {
+  const name = req.body?.name;
+  try {
+    const next = setAiConfigByName(name);
+    res.json({
+      ok: true,
+      ...getAiConfigStatus(),
+      applied: true,
+      current: next.name,
+    });
+  } catch (err) {
+    res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
   }
 });
 
@@ -641,7 +664,7 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     modelOptions: {
       hefPath: HAILO_HEF_PATH,
       postProcessFunc: 'filter',
-      postProcessConfig: AI_POSTPROCESS_CONFIG,
+      postProcessConfig: aiPostprocessConfig,
     },
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -813,6 +836,46 @@ function applyLabelMap(frames, labelMap) {
       return det;
     }),
   }));
+}
+
+function listAiConfigFiles() {
+  try {
+    return fs
+      .readdirSync(AI_CONFIG_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (err) {
+    log('Failed to list AI config files', err.message);
+    return [];
+  }
+}
+
+function getAiConfigStatus() {
+  const options = listAiConfigFiles();
+  const current = path.basename(aiPostprocessConfig);
+  const needsRestart = sessionManager.isRunning() || aiPreviewSessions.size > 0;
+  return {
+    current,
+    options,
+    needsRestart,
+  };
+}
+
+function setAiConfigByName(name) {
+  if (!name || typeof name !== 'string') {
+    throw httpError('Config name is required', 400);
+  }
+  const safeName = path.basename(name);
+  const options = listAiConfigFiles();
+  if (!options.includes(safeName)) {
+    throw httpError('Invalid config name', 400);
+  }
+  aiPostprocessConfig = path.join(AI_CONFIG_DIR, safeName);
+  if (sessionManager?.defaultModelOptions) {
+    sessionManager.defaultModelOptions.postProcessConfig = aiPostprocessConfig;
+  }
+  return { name: safeName, path: aiPostprocessConfig };
 }
 
 function parseSessionOptions(body) {
@@ -1046,7 +1109,7 @@ async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, 
     inputPath,
     metaPath: metaRawPath,
     model,
-    modelOptions: { hefPath: HAILO_HEF_PATH },
+      modelOptions: { hefPath: HAILO_HEF_PATH, postProcessConfig: aiPostprocessConfig },
   });
   const timeoutMs = computeAnalyzeTimeout(format, durationSec);
   logCommand(SESSION_GST_CMD, gstArgs);

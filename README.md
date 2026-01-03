@@ -219,6 +219,8 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 ### 2.6 기타
 
 - `GET /uploads/:name` : 저장 파일 정적 서빙
+- `GET /api/uploads?ext=jpg&limit=200&offset=0&sort=desc` : 업로드된 파일 목록(앨범용)
+- 응답 형식: `{ ok, total, items:[{ name, size, mtimeMs, url }] }`
 - `DELETE /api/uploads/:name` : 저장 파일 삭제 (AUTH_TOKEN 설정 시 Bearer 필요)
 - 스모크 테스트: `npm test` 또는 `PORT=3001 node scripts/smoke_test.js`
 - 프리뷰+세션 동시 스모크: `BASE_URL=http://localhost:3001 scripts/smoke.sh`

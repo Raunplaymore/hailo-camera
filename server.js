@@ -276,6 +276,24 @@ app.use((req, _res, next) => {
 // API 인증 보호
 app.use('/api', authMiddleware);
 
+// 업로드 파일 목록 조회 (앨범용)
+app.get('/api/uploads', async (req, res) => {
+  const extParam = typeof req.query.ext === 'string' ? req.query.ext.trim() : '';
+  const extList = extParam
+    ? extParam.split(',').map((ext) => ext.trim().toLowerCase()).filter(Boolean)
+    : ['jpg', 'jpeg', 'png'];
+  const limit = clampInt(req.query.limit, 200, 1, 1000);
+  const offset = clampInt(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const sort = typeof req.query.sort === 'string' ? req.query.sort : 'desc';
+
+  try {
+    const files = await listUploadFiles({ extList, limit, offset, sort });
+    res.json({ ok: true, total: files.total, items: files.items });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Failed to list uploads' });
+  }
+});
+
 // 업로드 파일 삭제
 app.delete('/api/uploads/*', async (req, res) => {
   const rawPath = req.params[0] || '';
@@ -1047,6 +1065,43 @@ async function listSessions({ limit, offset }) {
   return items.slice(offset, offset + limit);
 }
 
+async function listUploadFiles({ extList, limit, offset, sort }) {
+  let entries = [];
+  try {
+    entries = await fsp.readdir(UPLOAD_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return { total: 0, items: [] };
+    }
+    throw err;
+  }
+
+  const items = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (entry.name.endsWith('.part')) continue;
+    const ext = path.extname(entry.name).slice(1).toLowerCase();
+    if (extList.length && !extList.includes(ext)) continue;
+    const fullPath = path.join(UPLOAD_DIR, entry.name);
+    try {
+      const stat = await fsp.stat(fullPath);
+      items.push({
+        name: entry.name,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        url: `/uploads/${encodeURIComponent(entry.name)}`,
+      });
+    } catch (err) {
+      log('Upload stat error', entry.name, err.message);
+    }
+  }
+
+  const direction = sort === 'asc' ? 1 : -1;
+  items.sort((a, b) => direction * (a.mtimeMs - b.mtimeMs));
+  const total = items.length;
+  return { total, items: items.slice(offset, offset + limit) };
+}
+
 function deriveJobIdFromStateFile(name) {
   return name.replace(/\.session\.json$/, '');
 }
@@ -1144,6 +1199,13 @@ function parseNonNegativeNumber(value, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num) || num < 0) return fallback;
   return num;
+}
+
+function clampInt(value, fallback, min, max) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const num = parseInt(value, 10);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(Math.max(num, min), max);
 }
 
 function clamp(value, min, max) {

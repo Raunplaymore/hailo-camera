@@ -10,6 +10,7 @@ const {
   buildGstShmInferenceArgs,
   buildGstShmPreviewArgs,
   buildGstShmAiPreviewArgs,
+  buildGstShmStillArgs,
   buildGstShmRecordArgs,
 } = require('./src/session/gstPipeline');
 const {
@@ -381,10 +382,11 @@ app.post('/api/camera/capture', async (req, res) => {
     return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
   }
 
-  if (streamingActive) {
+  const canUseSharedCapture = options.format === 'jpg' && sharedPipeline.isRunning();
+  if (streamingActive && !canUseSharedCapture) {
     return res.status(409).json({ ok: false, error: 'Camera streaming in progress' });
   }
-  if (sharedPipeline.isRunning()) {
+  if (sharedPipeline.isRunning() && !canUseSharedCapture) {
     return res.status(409).json({ ok: false, error: 'Camera pipeline active' });
   }
 
@@ -396,7 +398,11 @@ app.post('/api/camera/capture', async (req, res) => {
 
   let filename;
   try {
-    filename = await handleCapture(options, timeouts);
+    if (canUseSharedCapture) {
+      filename = await handleSharedCapture(options, timeouts);
+    } else {
+      filename = await handleCapture(options, timeouts);
+    }
     lastCaptureAt = new Date().toISOString();
     lastError = null;
     res.json({ ok: true, filename, url: `/uploads/${filename}` });
@@ -1156,6 +1162,34 @@ async function handleCapture(options, timeouts) {
   return options.filename;
 }
 
+async function handleSharedCapture(options, timeouts) {
+  await ensureUploadsDir();
+  const sourceConfig = sharedPipeline.getConfig();
+  if (!sourceConfig) {
+    const err = new Error('Shared camera pipeline not ready');
+    err.httpStatus = 409;
+    throw err;
+  }
+  const finalPath = path.join(UPLOAD_DIR, options.filename);
+  await sharedPipeline.retain('capture', sourceConfig);
+  try {
+    await captureStillFromSharedPipeline(
+      {
+        outputPath: finalPath,
+        srcWidth: sourceConfig.width,
+        srcHeight: sourceConfig.height,
+        srcFps: sourceConfig.fps,
+        width: options.width,
+        height: options.height,
+      },
+      timeouts.captureTimeout,
+    );
+    return options.filename;
+  } finally {
+    sharedPipeline.release('capture');
+  }
+}
+
 async function finalizeTempFile(tempPath, finalPath) {
   if (tempPath === finalPath) return;
   await fsp.rename(tempPath, finalPath);
@@ -1165,6 +1199,24 @@ async function captureStill({ width, height, durationSec, outputPath }, timeoutM
   const timeout = Math.max(500, durationSec * 1000);
   const args = ['-o', outputPath, '--width', String(width), '--height', String(height), '-t', String(timeout), '-n'];
   const { stdout, stderr } = await runCameraCommand(STILL_COMMANDS, args, timeoutMs);
+  logOutputs(stdout, stderr);
+}
+
+async function captureStillFromSharedPipeline(
+  { outputPath, srcWidth, srcHeight, srcFps, width, height },
+  timeoutMs,
+) {
+  const gstArgs = buildGstShmStillArgs({
+    socketPath: SHARED_PIPELINE_SOCKET,
+    srcWidth,
+    srcHeight,
+    srcFps,
+    width,
+    height,
+    outputPath,
+  });
+  logCommand(SESSION_GST_CMD, gstArgs);
+  const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
   logOutputs(stdout, stderr);
 }
 

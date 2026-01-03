@@ -167,6 +167,34 @@ function buildGstShmAiPreviewArgs(options) {
   ];
 }
 
+function buildGstShmStillArgs(options) {
+  const { socketPath, srcWidth, srcHeight, srcFps, width, height, outputPath } = options;
+  const outWidth = width || srcWidth;
+  const outHeight = height || srcHeight;
+
+  return [
+    '-e',
+    'shmsrc',
+    `socket-path=${socketPath}`,
+    'is-live=true',
+    'do-timestamp=true',
+    'num-buffers=1',
+    '!',
+    `video/x-raw,width=${srcWidth},height=${srcHeight},format=NV12,framerate=${srcFps}/1`,
+    '!',
+    'videoconvert',
+    '!',
+    'videoscale',
+    '!',
+    `video/x-raw,width=${outWidth},height=${outHeight}`,
+    '!',
+    'jpegenc',
+    '!',
+    'filesink',
+    `location=${outputPath}`,
+  ];
+}
+
 function buildGstShmRecordArgs(options) {
   const { socketPath, width, height, fps, outputPath, encoder } = options;
   const selectedEncoder = encoder || 'openh264enc';
@@ -261,6 +289,7 @@ module.exports = {
   buildGstShmInferenceArgs,
   buildGstShmPreviewArgs,
   buildGstShmAiPreviewArgs,
+  buildGstShmStillArgs,
   buildGstShmRecordArgs,
   resolveModelOptions,
 };

@@ -3,7 +3,6 @@
   "max_boxes": 100,
   "output_layer": "yolov8s/yolov8_nms_postprocess",
   "allowed_labels": [
-    "person",
     "cat"
   ],
   "labels": [

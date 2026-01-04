@@ -37,6 +37,7 @@ jobs:
             server.js \
             src \
             config \
+            calibration \
             tsconfig.json \
             package.json \
             package-lock.json \

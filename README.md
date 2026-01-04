@@ -196,6 +196,10 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 
 통합 메모: 세션 종료 시 서버가 `ANALYZE_URL`에 `{ jobId, filename: "<jobId>.mp4", metaPath, force:false }` 를 전송합니다. (필요 시 백엔드에서 동일 포맷으로 재시도 가능)
 
+`DELETE /api/session/:jobId`
+
+- 세션 비디오/메타/상태를 함께 삭제합니다.
+
 ### 2.4 Auto Record (Ready 기반)
 
 `src/auto/*` 의 `AutoRecordManager`는 **Ready 상태에서 사람 안정(어드레스) 감지 후 자동 녹화**를 수행합니다. 서버 시작 시 `ts-node`로 로드되어 있을 때만 활성화되며, 락/스트림 상태를 공유하므로 다른 캡처와 동시에 실행되지 않습니다.

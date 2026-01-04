@@ -450,6 +450,20 @@ app.post('/api/session/:jobId/stop', async (req, res) => {
   }
 });
 
+// 세션 삭제 (비디오/메타/상태)
+app.delete('/api/session/:jobId', async (req, res) => {
+  const jobId = req.params.jobId;
+  try {
+    if (sessionManager.isRunning() && sessionManager.getStatus(jobId)?.status === 'running') {
+      return res.status(409).json({ ok: false, error: 'Session is still running' });
+    }
+    const deleted = await deleteSessionArtifacts(jobId);
+    res.json({ ok: true, jobId, ...deleted });
+  } catch (err) {
+    res.status(err.httpStatus || 500).json({ ok: false, error: err.message });
+  }
+});
+
 // 세션 목록 조회
 app.get('/api/session/list', async (req, res) => {
   const limit = clamp(parseNonNegativeNumber(req.query.limit, 50), 1, 200);
@@ -1145,6 +1159,37 @@ function buildDefaultFilename({ format }) {
   const ms = String(now.getMilliseconds()).padStart(3, '0');
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${ms}`;
   return `ray_golf_${ts}_swing.${format}`;
+}
+
+async function deleteSessionArtifacts(jobId) {
+  const statePath = path.join(SESSION_STATE_DIR, `${jobId}.session.json`);
+  let videoFile = `${jobId}.mp4`;
+  let metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
+  let metaRawPath = `${metaPath}.raw`;
+  try {
+    const raw = await fsp.readFile(statePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed?.videoFile) {
+      videoFile = parsed.videoFile;
+    }
+    if (parsed?.metaPath) {
+      metaPath = parsed.metaPath;
+      metaRawPath = `${parsed.metaPath}.raw`;
+    }
+  } catch (_) {
+    // fall back to defaults
+  }
+  const uploadPath = path.join(UPLOAD_DIR, videoFile);
+  const uploadPartPath = `${uploadPath}.part`;
+  const deleted = { videoFile, metaPath };
+  await Promise.all([
+    fsp.unlink(uploadPath).catch(() => undefined),
+    fsp.unlink(uploadPartPath).catch(() => undefined),
+    fsp.unlink(metaPath).catch(() => undefined),
+    fsp.unlink(metaRawPath).catch(() => undefined),
+    fsp.unlink(statePath).catch(() => undefined),
+  ]);
+  return deleted;
 }
 
 function getAutoRecordStatus() {

@@ -252,14 +252,25 @@ class ProcessManager {
   }
 
   async terminateProcess(child, label, signal) {
-    if (!child || child.killed || child.exitCode !== null) return;
+    if (!child || child.exitCode !== null) return;
     return new Promise((resolve) => {
       let settled = false;
+      const isAlive = () => {
+        if (!child || child.exitCode !== null) return false;
+        if (!child.pid) return false;
+        try {
+          process.kill(child.pid, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      };
       const finalize = () => {
         if (settled) return;
         settled = true;
         clearTimeout(termTimer);
         clearTimeout(killTimer);
+        clearTimeout(forceTimer);
         resolve();
       };
       child.once('close', finalize);
@@ -271,15 +282,21 @@ class ProcessManager {
         return;
       }
       const termTimer = setTimeout(() => {
-        if (!child.killed) {
+        if (isAlive()) {
           child.kill('SIGTERM');
         }
       }, 2000);
       const killTimer = setTimeout(() => {
-        if (!child.killed) {
+        if (isAlive()) {
           child.kill('SIGKILL');
         }
       }, 5000);
+      const forceTimer = setTimeout(() => {
+        if (isAlive()) {
+          this.logger(`${label} still alive after timeout`);
+        }
+        finalize();
+      }, 7000);
     });
   }
 

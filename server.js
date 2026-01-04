@@ -268,6 +268,13 @@ if (CORS_ALLOW_ALL || CORS_ORIGIN) {
 // 업로드 파일 정적 서빙
 app.use('/uploads', express.static(UPLOAD_DIR, { extensions: ['jpg', 'h264', 'mp4'] }));
 
+app.use((err, _req, res, next) => {
+  if (err && (err.code === 'ERR_RANGE_NOT_SATISFIABLE' || err.statusCode === 416)) {
+    return res.status(416).json({ ok: false, error: 'Range not satisfiable' });
+  }
+  return next(err);
+});
+
 app.use((req, _res, next) => {
   log(`${req.method} ${req.url}`, req.body && Object.keys(req.body).length ? req.body : '');
   next();
@@ -415,6 +422,13 @@ app.post('/api/session/start', async (req, res) => {
   }
   if (await isBusy()) {
     return res.status(409).json({ ok: false, error: 'Camera busy' });
+  }
+
+  const pipelineConfig = sharedPipeline.getConfig();
+  if (sharedPipeline.isRunning() && pipelineConfig) {
+    options.width = pipelineConfig.width;
+    options.height = pipelineConfig.height;
+    options.fps = pipelineConfig.fps;
   }
 
   const jobId = buildJobId();

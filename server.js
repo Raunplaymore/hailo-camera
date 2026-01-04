@@ -63,7 +63,9 @@ const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DI
 const SESSION_STATE_DIR = '/tmp';
 const SESSION_LOCK_FILE = '/tmp/session.lock';
 const SESSION_MAX_TAIL_FRAMES = 200;
-const SHARED_PIPELINE_SOCKET = '/tmp/hailo_camera.shm';
+const SHARED_PIPELINE_SOCKET_PREVIEW = '/tmp/hailo_camera_preview.shm';
+const SHARED_PIPELINE_SOCKET_RECORD = '/tmp/hailo_camera_record.shm';
+const SHARED_PIPELINE_SOCKET_INFER = '/tmp/hailo_camera_infer.shm';
 const SHARED_PIPELINE_SHM_SIZE = 64 * 1024 * 1024;
 
 // 인증/스트림/모델 설정
@@ -114,7 +116,11 @@ const AUTO_RECORD_CONFIG = {
 // 카메라 공유 파이프라인(shm) 관리
 const sharedPipeline = new SharedPipeline({
   gstCmd: SESSION_GST_CMD,
-  socketPath: SHARED_PIPELINE_SOCKET,
+  socketPaths: {
+    preview: SHARED_PIPELINE_SOCKET_PREVIEW,
+    record: SHARED_PIPELINE_SOCKET_RECORD,
+    inference: SHARED_PIPELINE_SOCKET_INFER,
+  },
   shmSize: SHARED_PIPELINE_SHM_SIZE,
   logger: (...args) => log(...args),
 });
@@ -134,7 +140,8 @@ const sessionManager = new ProcessManager({
   buildRecordArgs: (options) =>
     buildGstShmRecordArgs({ ...options, encoder: SESSION_RECORD_ENCODER }),
   pipeline: sharedPipeline,
-  socketPath: SHARED_PIPELINE_SOCKET,
+  recordSocketPath: SHARED_PIPELINE_SOCKET_RECORD,
+  inferenceSocketPath: SHARED_PIPELINE_SOCKET_INFER,
   defaultModelOptions: { hefPath: HAILO_HEF_PATH, postProcessConfig: aiPostprocessConfig },
   ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
@@ -230,7 +237,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
       detector: new AutoRecordDetector({
         gstCmd: SESSION_GST_CMD,
         pipeline: sharedPipeline,
-        socketPath: SHARED_PIPELINE_SOCKET,
+        socketPath: SHARED_PIPELINE_SOCKET_INFER,
         sourceConfig: {
           width: SESSION_DEFAULTS.width,
           height: SESSION_DEFAULTS.height,
@@ -699,7 +706,7 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
 
   const previewId = ++previewSessionCounter;
   const previewArgs = buildGstShmPreviewArgs({
-    socketPath: SHARED_PIPELINE_SOCKET,
+    socketPath: SHARED_PIPELINE_SOCKET_PREVIEW,
     srcWidth: sourceConfig.width,
     srcHeight: sourceConfig.height,
     srcFps: sourceConfig.fps,
@@ -793,7 +800,7 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
 
   const previewId = ++aiPreviewSessionCounter;
   const previewArgs = buildGstShmAiPreviewArgs({
-    socketPath: SHARED_PIPELINE_SOCKET,
+    socketPath: SHARED_PIPELINE_SOCKET_PREVIEW,
     srcWidth: sourceConfig.width,
     srcHeight: sourceConfig.height,
     srcFps: sourceConfig.fps,
@@ -1580,7 +1587,7 @@ async function captureStillFromSharedPipeline(
   timeoutMs,
 ) {
   const gstArgs = buildGstShmStillArgs({
-    socketPath: SHARED_PIPELINE_SOCKET,
+    socketPath: SHARED_PIPELINE_SOCKET_PREVIEW,
     srcWidth,
     srcHeight,
     srcFps,
@@ -1599,7 +1606,7 @@ async function captureH264FromSharedPipeline(
   timeoutMs,
 ) {
   const gstArgs = buildGstShmH264Args({
-    socketPath: SHARED_PIPELINE_SOCKET,
+    socketPath: SHARED_PIPELINE_SOCKET_PREVIEW,
     srcWidth,
     srcHeight,
     srcFps,
@@ -1621,7 +1628,7 @@ async function captureMp4FromSharedPipeline(
   timeoutMs,
 ) {
   const gstArgs = buildGstShmMp4Args({
-    socketPath: SHARED_PIPELINE_SOCKET,
+    socketPath: SHARED_PIPELINE_SOCKET_PREVIEW,
     srcWidth,
     srcHeight,
     srcFps,

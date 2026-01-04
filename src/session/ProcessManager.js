@@ -26,7 +26,8 @@ class ProcessManager {
     this.onSessionFinished = options.onSessionFinished || null;
     this.defaultModelOptions = options.defaultModelOptions || {};
     this.pipeline = options.pipeline || null;
-    this.socketPath = options.socketPath || '/tmp/hailo_camera.shm';
+    this.recordSocketPath = options.recordSocketPath || options.socketPath || '/tmp/hailo_camera_record.shm';
+    this.inferenceSocketPath = options.inferenceSocketPath || options.socketPath || '/tmp/hailo_camera_infer.shm';
     this.currentSession = null;
     this.signalHandlersRegistered = false;
   }
@@ -97,7 +98,7 @@ class ProcessManager {
       }
 
       const inferenceArgs = this.buildGstArgs({
-        socketPath: this.socketPath,
+        socketPath: this.inferenceSocketPath,
         width,
         height,
         fps,
@@ -107,7 +108,7 @@ class ProcessManager {
       });
       const recordArgs = this.buildRecordArgs
         ? this.buildRecordArgs({
-            socketPath: this.socketPath,
+            socketPath: this.recordSocketPath,
             width,
             height,
             fps,

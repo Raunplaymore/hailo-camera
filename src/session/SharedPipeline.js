@@ -1,12 +1,16 @@
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-const DEFAULT_SHM_PATH = '/tmp/hailo_camera.shm';
+const DEFAULT_SHM_PATHS = {
+  preview: '/tmp/hailo_camera_preview.shm',
+  record: '/tmp/hailo_camera_record.shm',
+  inference: '/tmp/hailo_camera_infer.shm',
+};
 
 class SharedPipeline {
   constructor(options = {}) {
     this.gstCmd = options.gstCmd || 'gst-launch-1.0';
-    this.socketPath = options.socketPath || DEFAULT_SHM_PATH;
+    this.socketPaths = options.socketPaths || DEFAULT_SHM_PATHS;
     this.shmSize = options.shmSize || 64 * 1024 * 1024;
     this.logger = options.logger || (() => {});
     this.pipelineProc = null;
@@ -14,6 +18,10 @@ class SharedPipeline {
     this.starting = null;
     this.lastError = null;
     this.users = { preview: 0, session: 0 };
+  }
+
+  getSocketPaths() {
+    return { ...this.socketPaths };
   }
 
   getConfig() {
@@ -75,18 +83,20 @@ class SharedPipeline {
       throw err;
     }
     this.pipelineConfig = { ...config };
-    try {
-      fs.unlinkSync(this.socketPath);
-    } catch (err) {
-      if (err.code !== 'ENOENT') {
-        this.logger('shm socket cleanup failed', err.message);
+    Object.values(this.socketPaths).forEach((socketPath) => {
+      try {
+        fs.unlinkSync(socketPath);
+      } catch (err) {
+        if (err.code !== 'ENOENT') {
+          this.logger('shm socket cleanup failed', err.message);
+        }
       }
-    }
+    });
     const args = buildSharedPipelineArgs({
       width: config.width,
       height: config.height,
       fps: config.fps,
-      socketPath: this.socketPath,
+      socketPaths: this.socketPaths,
       shmSize: this.shmSize,
     });
     this.logger(`Starting shared pipeline: ${this.gstCmd} ${args.join(' ')}`);
@@ -140,7 +150,8 @@ class SharedPipeline {
   }
 }
 
-function buildSharedPipelineArgs({ width, height, fps, socketPath, shmSize }) {
+function buildSharedPipelineArgs({ width, height, fps, socketPaths, shmSize }) {
+  const { preview, record, inference } = socketPaths || DEFAULT_SHM_PATHS;
   return [
     '-e',
     'libcamerasrc',
@@ -149,10 +160,34 @@ function buildSharedPipelineArgs({ width, height, fps, socketPath, shmSize }) {
     '!',
     'queue',
     '!',
+    'tee',
+    'name=t',
+    't.',
+    '!',
+    'queue',
+    '!',
     'shmsink',
-    `socket-path=${socketPath}`,
+    `socket-path=${preview}`,
     `shm-size=${shmSize}`,
-    'wait-for-connection=true',
+    'wait-for-connection=false',
+    'sync=false',
+    't.',
+    '!',
+    'queue',
+    '!',
+    'shmsink',
+    `socket-path=${record}`,
+    `shm-size=${shmSize}`,
+    'wait-for-connection=false',
+    'sync=false',
+    't.',
+    '!',
+    'queue',
+    '!',
+    'shmsink',
+    `socket-path=${inference}`,
+    `shm-size=${shmSize}`,
+    'wait-for-connection=false',
     'sync=false',
   ];
 }

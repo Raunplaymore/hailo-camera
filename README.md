@@ -116,6 +116,14 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 - 필요 플러그인: `hailonet`, `hailofilter`, `hailooverlay`
 - 토큰이 설정되면 `?token=` 또는 `X-Stream-Token` 필요
 
+`GET /api/camera/calibration/list`
+
+- `calibration/` 폴더의 보정 파일 목록을 반환합니다.
+
+`GET /api/camera/calibration/:name`
+
+- 렌즈 보정 JSON을 반환합니다. (예: `lens_8mm_intrinsics.json`)
+
 ### 2.3 세션(녹화 + Hailo 추론)
 
 `POST /api/session/start`
@@ -300,3 +308,13 @@ Bearer 인증이 설정되어 있으면 `-H "Authorization: Bearer $AUTH_TOKEN"`
 - `409` 카메라 사용 중(캡처 락/스트림)
 - `500` 캡처/ffmpeg/분석 실패
 - `504` 캡처/분석 타임아웃
+
+---
+
+## 6. 렌즈별 캘리브레이션 기록
+
+ChArUco 보드로 캘리브레이션한 카메라 내부 파라미터(JSON)는 `calibration/`에 렌즈별로 보관합니다.
+
+- 경로 규칙: `calibration/lens_<focal>_intrinsics.json`
+- 예시: `calibration/lens_8mm_intrinsics.json`
+- 필드: `cameraMatrix`, `distCoeffs`, `fx`, `fy`, `h_fov_deg`, `v_fov_deg` 등

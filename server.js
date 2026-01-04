@@ -63,6 +63,7 @@ const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DI
 const SESSION_STATE_DIR = '/tmp';
 const SESSION_LOCK_FILE = '/tmp/session.lock';
 const SESSION_MAX_TAIL_FRAMES = 200;
+const CALIBRATION_DIR = path.join(__dirname, 'calibration');
 const SHARED_PIPELINE_SOCKET_PREVIEW = '/tmp/hailo_camera_preview.shm';
 const SHARED_PIPELINE_SOCKET_RECORD = '/tmp/hailo_camera_record.shm';
 const SHARED_PIPELINE_SOCKET_INFER = '/tmp/hailo_camera_infer.shm';
@@ -354,6 +355,27 @@ app.get('/api/camera/auto-record/status', (_req, res) => {
       error: err.message || 'Auto record status error',
       status: getFallbackStatus(),
     });
+  }
+});
+
+// 카메라 캘리브레이션 목록
+app.get('/api/camera/calibration/list', (_req, res) => {
+  try {
+    const items = listCalibrationFiles();
+    res.json({ ok: true, items });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 카메라 캘리브레이션 조회
+app.get('/api/camera/calibration/:name', async (req, res) => {
+  const name = req.params.name || '';
+  try {
+    const data = await loadCalibration(name);
+    res.json({ ok: true, ...data });
+  } catch (err) {
+    res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
   }
 });
 
@@ -1180,6 +1202,37 @@ function buildDefaultFilename({ format }) {
   const ms = String(now.getMilliseconds()).padStart(3, '0');
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${ms}`;
   return `ray_golf_${ts}_swing.${format}`;
+}
+
+function listCalibrationFiles() {
+  try {
+    return fs
+      .readdirSync(CALIBRATION_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (err) {
+    log('Failed to list calibration files', err.message);
+    return [];
+  }
+}
+
+async function loadCalibration(name) {
+  if (!name || typeof name !== 'string') {
+    throw httpError('Calibration name is required', 400);
+  }
+  const safeName = path.basename(name);
+  if (!safeName.endsWith('.json')) {
+    throw httpError('Invalid calibration file', 400);
+  }
+  const targetPath = path.join(CALIBRATION_DIR, safeName);
+  try {
+    const raw = await fsp.readFile(targetPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return { name: safeName, data: parsed };
+  } catch (err) {
+    throw httpError('Calibration file not found', 404);
+  }
 }
 
 async function deleteSessionArtifacts(jobId) {

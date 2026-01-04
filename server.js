@@ -1048,7 +1048,7 @@ function buildJobId() {
 }
 
 function detectRecordEncoder() {
-  const candidates = ['avenc_h264_omx', 'openh264enc', 'x264enc', 'v4l2h264enc', 'avenc_h264'];
+  const candidates = ['x264enc', 'openh264enc', 'v4l2h264enc', 'avenc_h264', 'avenc_h264_omx'];
   for (const candidate of candidates) {
     if (gstElementAvailable(candidate)) {
       log(`Record encoder selected: ${candidate}`);

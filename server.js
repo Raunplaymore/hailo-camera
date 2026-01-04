@@ -807,6 +807,11 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     return res.status(409).json({ ok: false, error: 'AI stream already active' });
   }
   const streamOptions = parseStreamOptions(req.query || {});
+  const requestedConfigName = typeof req.query.config === 'string' ? req.query.config.trim() : '';
+  const requestedConfigPath = requestedConfigName ? resolveAiConfigPath(requestedConfigName) : null;
+  if (requestedConfigName && !requestedConfigPath) {
+    return res.status(400).json({ ok: false, error: 'Invalid ai config name' });
+  }
   const sourceConfig = sharedPipeline.getConfig() || {
     width: SESSION_DEFAULTS.width,
     height: SESSION_DEFAULTS.height,
@@ -833,7 +838,7 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     modelOptions: {
       hefPath: HAILO_HEF_PATH,
       postProcessFunc: 'filter',
-      postProcessConfig: aiPostprocessConfig,
+      postProcessConfig: requestedConfigPath || aiPostprocessConfig,
     },
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -1018,6 +1023,14 @@ function listAiConfigFiles() {
     log('Failed to list AI config files', err.message);
     return [];
   }
+}
+
+function resolveAiConfigPath(name) {
+  if (!name || typeof name !== 'string') return null;
+  const safeName = path.basename(name);
+  const options = listAiConfigFiles();
+  if (!options.includes(safeName)) return null;
+  return path.join(AI_CONFIG_DIR, safeName);
 }
 
 function getAiConfigStatus() {

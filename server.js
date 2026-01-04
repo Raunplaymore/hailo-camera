@@ -47,16 +47,16 @@ const LOCK_FALLBACK_TTL_MS = 10 * 60 * 1000;
 const MAX_STDIO_LOG = 4000;
 
 const DEFAULTS = {
-  width: parseInt(process.env.DEFAULT_WIDTH, 10) || 1280,
-  height: parseInt(process.env.DEFAULT_HEIGHT, 10) || 960,
+  width: parseInt(process.env.DEFAULT_WIDTH, 10) || 1456,
+  height: parseInt(process.env.DEFAULT_HEIGHT, 10) || 1088,
   fps: parseInt(process.env.DEFAULT_FPS, 10) || 30,
   stillDurationSec: parseInt(process.env.DEFAULT_STILL_DURATION_SEC, 10) || 1,
   videoDurationSec: parseInt(process.env.DEFAULT_VIDEO_DURATION_SEC, 10) || 3,
 };
 
 const SESSION_DEFAULTS = {
-  width: 1280,
-  height: 960,
+  width: 1456,
+  height: 1088,
   fps: 60,
 };
 const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DIR) : '/tmp';

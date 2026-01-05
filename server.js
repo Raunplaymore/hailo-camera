@@ -416,6 +416,26 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   }
 });
 
+// 자동 녹화 실시간 메타 tail
+app.get('/api/camera/auto-record/live', async (req, res) => {
+  const tailFrames = clamp(
+    parseNonNegativeNumber(req.query.tailFrames, 30),
+    1,
+    SESSION_MAX_TAIL_FRAMES,
+  );
+  const metaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
+  const tailBytes = Math.min(512 * 1024, Math.max(16 * 1024, tailFrames * 4096));
+  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+
+  try {
+    const text = await readTail(metaPath, tailBytes);
+    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap);
+    res.json({ ok: true, frames });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, frames: [] });
+  }
+});
+
 // AI postprocess config 조회
 app.get('/api/camera/ai-config', (_req, res) => {
   res.json({ ok: true, ...getAiConfigStatus() });

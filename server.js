@@ -1603,7 +1603,11 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
   const payload = {
     jobId,
     mode: 'coach_from_meta',
-    source: { metaPath },
+    source: {
+      metaPath,
+      filename,
+      videoPath: filename ? path.join(UPLOAD_DIR, filename) : null,
+    },
     options: { force: Boolean(force) },
   };
   try {

@@ -228,6 +228,13 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         width: DEFAULTS.width,
         height: DEFAULTS.height,
         fps: DEFAULTS.fps,
+        mode: 'shm',
+        gstCmd: SESSION_GST_CMD,
+        socketPath: SHARED_PIPELINE_SOCKET_RECORD,
+        sourceWidth: SESSION_DEFAULTS.width,
+        sourceHeight: SESSION_DEFAULTS.height,
+        sourceFps: SESSION_DEFAULTS.fps,
+        encoder: SESSION_RECORD_ENCODER,
         videoCommands: VIDEO_COMMANDS,
         libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
         acquireLock: tryAcquireLock,
@@ -254,7 +261,6 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         logger: (...args) => log(...args),
       }),
       config: AUTO_RECORD_CONFIG,
-      pauseDetectorDuringRecording: true,
       logger: (...args) => log(...args),
     });
   } catch (err) {

@@ -2,6 +2,8 @@ import { ChildProcess, spawn } from 'child_process';
 import { promises as fsp } from 'fs';
 import path from 'path';
 import { RecorderAdapter, RecorderControllerOptions } from './types';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { buildGstShmRecordArgs } = require('../session/gstPipeline');
 
 const createError = (message: string, status = 500) => {
   const err = new Error(message) as Error & { status?: number };
@@ -40,11 +42,13 @@ export class RecorderController implements RecorderAdapter {
     const tempPath = `${finalPath}.part`;
     await fsp.mkdir(path.dirname(finalPath), { recursive: true });
     await fsp.unlink(tempPath).catch(() => undefined);
-    const args = this.buildArgs(tempPath);
-    const child = await this.spawnRecorder(args);
-    child.stderr?.on('data', (data) => this.log('[libcamera-vid]', data.toString().trim()));
+    const mode = this.options.mode || 'camera';
+    const args = mode === 'shm' ? this.buildShmArgs(tempPath) : this.buildArgs(tempPath);
+    const child = mode === 'shm' ? await this.spawnGstRecorder(args) : await this.spawnRecorder(args);
+    const stderrLabel = mode === 'shm' ? '[gst-launch]' : '[libcamera-vid]';
+    child.stderr?.on('data', (data) => this.log(stderrLabel, data.toString().trim()));
     child.on('close', (code, signal) => {
-      this.log('libcamera-vid closed', code, signal || '');
+      this.log('Recorder closed', code, signal || '');
       this.process = null;
       this.stopping = false;
       if (this.lockHeld) {
@@ -130,6 +134,24 @@ export class RecorderController implements RecorderAdapter {
     ];
   }
 
+  private buildShmArgs(outputPath: string) {
+    const socketPath = this.options.socketPath;
+    const srcWidth = this.options.sourceWidth ?? this.options.width;
+    const srcHeight = this.options.sourceHeight ?? this.options.height;
+    const srcFps = this.options.sourceFps ?? this.options.fps;
+    if (!socketPath) {
+      throw createError('socketPath is required for shm recording');
+    }
+    return buildGstShmRecordArgs({
+      socketPath,
+      width: srcWidth,
+      height: srcHeight,
+      fps: srcFps,
+      outputPath,
+      encoder: this.options.encoder,
+    });
+  }
+
   private ensureMp4Extension(filename: string) {
     if (filename.endsWith('.mp4')) return filename;
     return `${filename}.mp4`;
@@ -167,6 +189,24 @@ export class RecorderController implements RecorderAdapter {
       }
     }
     throw lastErr || createError('No recording command available');
+  }
+
+  private async spawnGstRecorder(args: string[]) {
+    const command = this.options.gstCmd || 'gst-launch-1.0';
+    this.log('Spawning recorder', command, args.join(' '));
+    return new Promise<ChildProcess>((resolve, reject) => {
+      const proc = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const onError = (err: Error) => {
+        proc.removeListener('spawn', onSpawn);
+        reject(err);
+      };
+      const onSpawn = () => {
+        proc.removeListener('error', onError);
+        resolve(proc);
+      };
+      proc.once('error', onError);
+      proc.once('spawn', onSpawn);
+    });
   }
 
   private log(...args: unknown[]) {

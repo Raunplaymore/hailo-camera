@@ -62,6 +62,13 @@ export interface RecorderControllerOptions {
   width: number;
   height: number;
   fps: number;
+  mode?: 'camera' | 'shm';
+  gstCmd?: string;
+  socketPath?: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  sourceFps?: number;
+  encoder?: string;
   videoCommands: string[];
   acquireLock: (expectedMs: number) => Promise<boolean>;
   releaseLock: () => Promise<void>;

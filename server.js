@@ -81,6 +81,7 @@ const AI_CONFIG_DIR = path.join(__dirname, 'config');
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms.json');
 let aiPostprocessConfig = DEFAULT_AI_CONFIG;
+let aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
@@ -211,7 +212,7 @@ class AutoRecordDetector {
       const text = await readTail(this.metaPath, tailBytes);
       const frames = parseTailFrames(text, 5);
       const labelMap = this.labelMapProvider ? this.labelMapProvider() : {};
-      const normalized = applyLabelMap(frames, labelMap);
+      const normalized = applyLabelMap(frames, labelMap, aiAllowedLabels);
       return normalized.length ? normalized[normalized.length - 1] : null;
     } catch (err) {
       return null;
@@ -429,7 +430,7 @@ app.get('/api/camera/auto-record/live', async (req, res) => {
 
   try {
     const text = await readTail(metaPath, tailBytes);
-    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap);
+    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap, aiAllowedLabels);
     res.json({ ok: true, frames });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, frames: [] });
@@ -577,7 +578,9 @@ app.get('/api/session/:jobId/meta', async (req, res) => {
     } else {
       frames = frames.map(normalizeFrame);
     }
-    frames = applyLabelMap(frames, labelMap).filter((frame) => frame.t !== null || frame.detections.length);
+    frames = applyLabelMap(frames, labelMap, aiAllowedLabels).filter(
+      (frame) => frame.t !== null || frame.detections.length,
+    );
     res.json({ ok: true, jobId, metaPath, frames });
   } catch (err) {
     res.status(404).json({ ok: false, error: err.message, metaPath, frames: [] });
@@ -600,7 +603,7 @@ app.get('/api/session/:jobId/live', async (req, res) => {
   try {
     const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
     const text = await readTail(targetPath, tailBytes);
-    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap);
+    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap, aiAllowedLabels);
     res.json({ ok: true, jobId, frames });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, frames: [] });
@@ -700,6 +703,7 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId: metaBase,
       labelMap: parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
+      allowedLabels: aiAllowedLabels,
     });
 
     triggerAnalyzeRequest({
@@ -1016,18 +1020,41 @@ function parseLabelMap(raw) {
   return map;
 }
 
+function normalizeAllowedLabels(allowedLabels) {
+  if (!allowedLabels) return null;
+  if (allowedLabels instanceof Set) return allowedLabels.size ? allowedLabels : null;
+  if (!Array.isArray(allowedLabels)) return null;
+  const set = new Set();
+  allowedLabels.forEach((label) => {
+    const value = String(label).trim().toLowerCase();
+    if (value) set.add(value);
+  });
+  return set.size ? set : null;
+}
+
 // 탐지 결과에 라벨 매핑 적용
-function applyLabelMap(frames, labelMap) {
-  if (!labelMap || !Object.keys(labelMap).length) return frames;
-  return frames.map((frame) => ({
+function applyLabelMap(frames, labelMap, allowedLabels) {
+  const mapped = (!labelMap || !Object.keys(labelMap).length)
+    ? frames
+    : frames.map((frame) => ({
+        ...frame,
+        detections: (frame.detections || []).map((det) => {
+          if (!det) return det;
+          if (det.label && det.label !== 'unknown') return det;
+          if (det.classId !== null && labelMap[det.classId]) {
+            return { ...det, label: labelMap[det.classId] };
+          }
+          return det;
+        }),
+      }));
+  const allowedSet = normalizeAllowedLabels(allowedLabels);
+  if (!allowedSet) return mapped;
+  return mapped.map((frame) => ({
     ...frame,
-    detections: (frame.detections || []).map((det) => {
-      if (!det) return det;
-      if (det.label && det.label !== 'unknown') return det;
-      if (det.classId !== null && labelMap[det.classId]) {
-        return { ...det, label: labelMap[det.classId] };
-      }
-      return det;
+    detections: (frame.detections || []).filter((det) => {
+      if (!det || !det.label) return false;
+      const label = String(det.label).trim().toLowerCase();
+      return label ? allowedSet.has(label) : false;
     }),
   }));
 }
@@ -1053,6 +1080,19 @@ function resolveAiConfigPath(name) {
   return path.join(AI_CONFIG_DIR, safeName);
 }
 
+function readAiConfigAllowedLabels(configPath) {
+  if (!configPath) return null;
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const allowed = parsed?.allowed_labels || parsed?.allowedLabels;
+    return normalizeAllowedLabels(allowed);
+  } catch (err) {
+    log('Failed to read AI config labels', err.message);
+    return null;
+  }
+}
+
 function getAiConfigStatus() {
   const options = listAiConfigFiles();
   const current = path.basename(aiPostprocessConfig);
@@ -1074,6 +1114,7 @@ function setAiConfigByName(name) {
     throw httpError('Invalid config name', 400);
   }
   aiPostprocessConfig = path.join(AI_CONFIG_DIR, safeName);
+  aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
   if (sessionManager?.defaultModelOptions) {
     sessionManager.defaultModelOptions.postProcessConfig = aiPostprocessConfig;
   }
@@ -1399,6 +1440,7 @@ async function finalizeSessionMeta(session) {
     await normalizeMetaFile(session.metaRawPath, session.metaPath, {
       jobId: session.jobId,
       labelMap,
+      allowedLabels: aiAllowedLabels,
     });
   } catch (err) {
     log('Meta normalization failed', err.message);

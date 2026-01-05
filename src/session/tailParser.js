@@ -134,15 +134,48 @@ function normalizeFrame(frame) {
     frame.t ?? frame['timestamp (ms)'] ?? frame.timestamp ?? frame.ts ?? frame.timestamp_ms,
   );
   const frameId = numberOrNull(frame.frame_id ?? frame.frame ?? frame.frameId);
-  const detectionsRaw = frame.detections || frame.objects || frame.boxes || [];
-  const detections = Array.isArray(detectionsRaw)
-    ? detectionsRaw.map(normalizeDetection).filter(Boolean)
-    : [];
+  const detectionsRaw = [];
+  if (Array.isArray(frame.detections)) detectionsRaw.push(...frame.detections);
+  if (Array.isArray(frame.objects)) detectionsRaw.push(...frame.objects);
+  if (Array.isArray(frame.boxes)) detectionsRaw.push(...frame.boxes);
+  const hailoDetections = extractHailoDetections(frame);
+  if (hailoDetections.length) detectionsRaw.push(...hailoDetections);
+  const detections = detectionsRaw.map(normalizeDetection).filter(Boolean);
   return {
     t,
     frame: frameId,
     detections,
   };
+}
+
+function extractHailoDetections(frame) {
+  const roi = frame?.HailoROI || frame?.hailo_roi || null;
+  if (!roi) return [];
+  const detections = [];
+  const stack = [roi];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    const det = node.HailoDetection || node.hailo_detection;
+    if (det && typeof det === 'object') {
+      detections.push({
+        label: det.label ?? det.class_name ?? det.name ?? null,
+        class_id: det.class_id ?? det.classId ?? det.class_index ?? det.id,
+        confidence: det.confidence ?? det.conf ?? det.score ?? det.prob,
+        bbox: det.HailoBBox ?? det.hailo_bbox ?? det.bbox ?? det.box ?? det.rect,
+      });
+      if (Array.isArray(det.SubObjects)) {
+        stack.push(...det.SubObjects);
+      } else if (Array.isArray(det.sub_objects)) {
+        stack.push(...det.sub_objects);
+      }
+    }
+    const sub = node.SubObjects || node.sub_objects;
+    if (Array.isArray(sub)) {
+      stack.push(...sub);
+    }
+  }
+  return detections;
 }
 
 function normalizeDetection(det) {

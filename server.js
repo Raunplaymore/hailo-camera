@@ -105,6 +105,7 @@ let streamClients = 0;
 let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
+let autoRecordPipelineHeld = false;
 
 const AUTO_RECORD_CONFIG = {
   addressStillMs: parseInt(process.env.AUTO_ADDRESS_STILL_MS, 10) || 2000,
@@ -222,6 +223,23 @@ class AutoRecordDetector {
 
 if (tsNodeRegistered && AutoRecordManager && RecorderController) {
   try {
+    const autoRecordSourceConfig = {
+      width: SESSION_DEFAULTS.width,
+      height: SESSION_DEFAULTS.height,
+      fps: SESSION_DEFAULTS.fps,
+    };
+    const retainAutoRecordPipeline = () => {
+      if (autoRecordPipelineHeld) return;
+      autoRecordPipelineHeld = true;
+      sharedPipeline
+        .retain('auto-record-guard', autoRecordSourceConfig)
+        .catch((err) => log('AutoRecord pipeline retain failed', err.message));
+    };
+    const releaseAutoRecordPipeline = () => {
+      if (!autoRecordPipelineHeld) return;
+      autoRecordPipelineHeld = false;
+      sharedPipeline.release('auto-record-guard');
+    };
     autoRecordManager = new AutoRecordManager({
       recorder: new RecorderController({
         uploadDir: UPLOAD_DIR,
@@ -261,6 +279,14 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         logger: (...args) => log(...args),
       }),
       config: AUTO_RECORD_CONFIG,
+      onStateChange: (state, prevState) => {
+        if (state === 'arming' && prevState === 'idle') {
+          retainAutoRecordPipeline();
+        }
+        if (state === 'failed' || state === 'idle') {
+          releaseAutoRecordPipeline();
+        }
+      },
       logger: (...args) => log(...args),
     });
   } catch (err) {

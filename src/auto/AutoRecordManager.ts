@@ -41,6 +41,7 @@ export class AutoRecordManager {
   private missingPersonFrames = 0;
   private pauseDetectorDuringRecording = false;
   private detectorPaused = false;
+  private onStateChange?: AutoRecordManagerOptions['onStateChange'];
 
   constructor(options: AutoRecordManagerOptions) {
     this.recorder = options.recorder;
@@ -50,6 +51,7 @@ export class AutoRecordManager {
       this.config = { ...this.config, ...options.config };
     }
     this.pauseDetectorDuringRecording = Boolean(options.pauseDetectorDuringRecording);
+    this.onStateChange = options.onStateChange;
   }
 
   isActive() {
@@ -140,8 +142,16 @@ export class AutoRecordManager {
   }
 
   private transitionTo(state: AutoRecordState) {
+    const prevState = this.state;
     this.state = state;
     this.log('AutoRecord state ->', state);
+    if (this.onStateChange) {
+      try {
+        this.onStateChange(state, prevState);
+      } catch (err) {
+        this.log('AutoRecord state callback failed', (err as Error).message);
+      }
+    }
   }
 
   private fail(err: Error) {

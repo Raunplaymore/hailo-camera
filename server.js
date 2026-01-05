@@ -381,7 +381,13 @@ app.get('/api/camera/status', async (_req, res) => {
 // 자동 녹화 상태 조회
 app.get('/api/camera/auto-record/status', (_req, res) => {
   try {
-    res.json({ ok: true, status: getAutoRecordStatus() });
+    const status = getAutoRecordStatus();
+    if (status.state === 'idle' && status.lastRecordingFilename) {
+      ensureAutoRecordSessionState(status.lastRecordingFilename).catch((err) =>
+        log('Auto record session state write failed', err.message)
+      );
+    }
+    res.json({ ok: true, status });
   } catch (err) {
     log('Auto record status error', err.message || err);
     res.status(200).json({
@@ -439,6 +445,9 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   if (!manager) return;
   try {
     const status = await manager.stop('user');
+    if (status.lastRecordingFilename) {
+      await ensureAutoRecordSessionState(status.lastRecordingFilename);
+    }
     res.json({ ok: true, status });
   } catch (err) {
     const statusCode = err.status === 409 ? 409 : 200;
@@ -1268,6 +1277,38 @@ async function listUploadFiles({ extList, limit, offset, sort }) {
 
 function deriveJobIdFromStateFile(name) {
   return name.replace(/\.session\.json$/, '');
+}
+
+function deriveJobIdFromFilename(name) {
+  if (!name || typeof name !== 'string') return null;
+  return path.basename(name).replace(/\.[^.]+$/, '');
+}
+
+async function ensureAutoRecordSessionState(filename) {
+  const jobId = deriveJobIdFromFilename(filename);
+  if (!jobId) return;
+  const statePath = path.join(SESSION_STATE_DIR, `${jobId}.session.json`);
+  try {
+    await fsp.access(statePath);
+    return;
+  } catch (_) {
+    // continue
+  }
+  const now = Date.now();
+  const payload = {
+    jobId,
+    status: 'recorded',
+    startedAt: now,
+    stoppedAt: now,
+    errorMessage: null,
+    pids: {},
+    videoFile: filename,
+    videoPath: path.join(UPLOAD_DIR, filename),
+    videoPartPath: null,
+    metaPath: null,
+    metaRawPath: null,
+  };
+  await fsp.writeFile(statePath, JSON.stringify(payload, null, 2));
 }
 
 function parseCaptureOptions(body) {

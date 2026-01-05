@@ -1602,9 +1602,9 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
   if (!ANALYZE_URL) return;
   const payload = {
     jobId,
-    filename,
-    metaPath,
-    force: Boolean(force),
+    mode: 'coach_from_meta',
+    source: { metaPath },
+    options: { force: Boolean(force) },
   };
   try {
     const analyzeResp = await fetch(ANALYZE_URL, {

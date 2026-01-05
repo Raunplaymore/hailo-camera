@@ -302,6 +302,8 @@ function buildGstShmRecordArgs(options) {
     '!',
     'videoconvert',
     '!',
+    'video/x-raw,format=I420',
+    '!',
     selectedEncoder,
     '!',
     'h264parse',

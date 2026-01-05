@@ -29,6 +29,7 @@ export interface AutoRecordManagerOptions {
   recorder: RecorderAdapter;
   detector: DetectorAdapter;
   config?: Partial<AutoRecordConfig>;
+  pauseDetectorDuringRecording?: boolean;
   logger?: (...args: unknown[]) => void;
 }
 

@@ -39,6 +39,8 @@ export class AutoRecordManager {
   private stableStartTs: number | null = null;
   private stableRefBox: DetectionBox | null = null;
   private missingPersonFrames = 0;
+  private pauseDetectorDuringRecording = false;
+  private detectorPaused = false;
 
   constructor(options: AutoRecordManagerOptions) {
     this.recorder = options.recorder;
@@ -47,6 +49,7 @@ export class AutoRecordManager {
     if (options.config) {
       this.config = { ...this.config, ...options.config };
     }
+    this.pauseDetectorDuringRecording = Boolean(options.pauseDetectorDuringRecording);
   }
 
   isActive() {
@@ -58,6 +61,7 @@ export class AutoRecordManager {
       throw createError('Auto record already running', 409);
     }
     this.clearTimers();
+    this.detectorPaused = false;
     await this.detector.start();
     this.lastError = null;
     this.startedAt = new Date().toISOString();
@@ -76,6 +80,7 @@ export class AutoRecordManager {
       await this.safeStopRecorder().catch((err) => this.fail(err as Error));
     }
     await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
+    this.detectorPaused = false;
     this.resetSession();
     return this.getStatus();
   }
@@ -100,6 +105,10 @@ export class AutoRecordManager {
   private async transitionToRecording() {
     if (this.state !== 'addressLocked') return;
     try {
+      if (this.pauseDetectorDuringRecording && !this.detectorPaused) {
+        await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
+        this.detectorPaused = true;
+      }
       const { filename } = await this.recorder.startRecording();
       this.recordingFilename = filename;
       this.lastRecordingFilename = filename;
@@ -190,6 +199,9 @@ export class AutoRecordManager {
   }
 
   private async handleDetectionTick() {
+    if (this.detectorPaused && this.state === 'recording') {
+      return;
+    }
     const frame = await this.detector.getLatestFrame();
     if (!frame) {
       if (this.state === 'recording') {

@@ -254,6 +254,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         logger: (...args) => log(...args),
       }),
       config: AUTO_RECORD_CONFIG,
+      pauseDetectorDuringRecording: true,
       logger: (...args) => log(...args),
     });
   } catch (err) {

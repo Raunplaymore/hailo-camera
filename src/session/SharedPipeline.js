@@ -15,9 +15,13 @@ class SharedPipeline {
     this.logger = options.logger || (() => {});
     this.pipelineProc = null;
     this.pipelineConfig = null;
+    this.lastConfig = null;
     this.starting = null;
     this.lastError = null;
     this.users = { preview: 0, session: 0 };
+    this.restarting = false;
+    this.intentionalStop = false;
+    this.restartDelayMs = options.restartDelayMs || 1000;
   }
 
   getSocketPaths() {
@@ -82,7 +86,9 @@ class SharedPipeline {
       err.status = 500;
       throw err;
     }
+    this.intentionalStop = false;
     this.pipelineConfig = { ...config };
+    this.lastConfig = { ...config };
     Object.values(this.socketPaths).forEach((socketPath) => {
       try {
         fs.unlinkSync(socketPath);
@@ -127,6 +133,9 @@ class SharedPipeline {
       if (code && code !== 0) {
         this.lastError = stderr || `Pipeline exited with code ${code}`;
       }
+      if (!this.intentionalStop) {
+        this.maybeRestart();
+      }
     });
 
     await waitForHealthy(child);
@@ -135,6 +144,7 @@ class SharedPipeline {
   stopPipeline(reason = 'idle') {
     if (!this.pipelineProc || this.pipelineProc.exitCode !== null) return;
     this.logger(`Stopping shared pipeline (${reason})`);
+    this.intentionalStop = true;
     try {
       this.pipelineProc.kill('SIGINT');
     } catch (_) {
@@ -147,6 +157,21 @@ class SharedPipeline {
     if (total === 0) {
       this.stopPipeline('idle');
     }
+  }
+
+  maybeRestart() {
+    const total = Object.values(this.users).reduce((sum, value) => sum + value, 0);
+    if (total === 0) return;
+    if (this.restarting || this.starting) return;
+    if (!this.lastConfig) return;
+    this.restarting = true;
+    setTimeout(() => {
+      this.ensureRunning(this.lastConfig)
+        .catch((err) => this.logger('shared pipeline restart failed', err.message))
+        .finally(() => {
+          this.restarting = false;
+        });
+    }, this.restartDelayMs);
   }
 }
 

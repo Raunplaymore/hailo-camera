@@ -1,5 +1,5 @@
 {
-  "detection_threshold": 0.25,
+  "detection_threshold": 0.15,
   "max_boxes": 100,
   "output_layer": "yolov8s/yolov8_nms_postprocess",
   "allowed_labels": [

@@ -10,7 +10,7 @@ module.exports = {
         AUTH_TOKEN: process.env.AUTH_TOKEN || '',
         CORS_ALLOW_ALL: process.env.CORS_ALLOW_ALL || '',
         CORS_ORIGIN: process.env.CORS_ORIGIN || '',
-        ANALYZE_URL: process.env.ANALYZE_URL || '',
+        ANALYZE_URL: process.env.ANALYZE_URL || 'http://127.0.0.1:3002/v1/jobs',
         DEFAULT_WIDTH: process.env.DEFAULT_WIDTH || '',
         DEFAULT_HEIGHT: process.env.DEFAULT_HEIGHT || '',
         DEFAULT_FPS: process.env.DEFAULT_FPS || '',

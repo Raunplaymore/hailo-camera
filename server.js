@@ -1307,6 +1307,7 @@ function getFallbackStatus() {
     state: 'failed',
     startedAt: null,
     recordingFilename: null,
+    lastRecordingFilename: null,
     lastError: 'Auto record unavailable',
   };
 }

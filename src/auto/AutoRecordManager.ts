@@ -28,6 +28,7 @@ export class AutoRecordManager {
   private timers: NodeJS.Timeout[] = [];
   private startedAt: string | null = null;
   private recordingFilename: string | null = null;
+  private lastRecordingFilename: string | null = null;
   private lastError: string | null = null;
   private config: AutoRecordConfig = { ...DEFAULT_CONFIG };
   private logger?: (...args: unknown[]) => void;
@@ -61,6 +62,7 @@ export class AutoRecordManager {
     this.lastError = null;
     this.startedAt = new Date().toISOString();
     this.recordingFilename = null;
+    this.lastRecordingFilename = null;
     this.resetDetectionState();
     this.transitionTo('arming');
     this.startPolling();
@@ -84,6 +86,7 @@ export class AutoRecordManager {
       state: this.state,
       startedAt: this.startedAt,
       recordingFilename: this.recordingFilename || null,
+      lastRecordingFilename: this.lastRecordingFilename || null,
       lastError: this.lastError || null,
     };
   }
@@ -99,6 +102,7 @@ export class AutoRecordManager {
     try {
       const { filename } = await this.recorder.startRecording();
       this.recordingFilename = filename;
+      this.lastRecordingFilename = filename;
       this.transitionTo('recording');
       this.missingPersonFrames = 0;
     } catch (err) {

@@ -12,6 +12,7 @@ export interface AutoRecordStatus {
   state: AutoRecordState;
   startedAt: string | null;
   recordingFilename: string | null;
+  lastRecordingFilename?: string | null;
   lastError: string | null;
 }
 

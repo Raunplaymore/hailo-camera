@@ -105,6 +105,7 @@ let streamClients = 0;
 let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
+let lastAutoAnalyzeFilename = null;
 let autoRecordPipelineHeld = false;
 
 const AUTO_RECORD_CONFIG = {
@@ -383,8 +384,8 @@ app.get('/api/camera/auto-record/status', (_req, res) => {
   try {
     const status = getAutoRecordStatus();
     if (status.state === 'idle' && status.lastRecordingFilename) {
-      ensureAutoRecordSessionState(status.lastRecordingFilename).catch((err) =>
-        log('Auto record session state write failed', err.message)
+      finalizeAutoRecordMeta(status.lastRecordingFilename).catch((err) =>
+        log('Auto record finalize failed', err.message)
       );
     }
     res.json({ ok: true, status });
@@ -446,7 +447,7 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   try {
     const status = await manager.stop('user');
     if (status.lastRecordingFilename) {
-      await ensureAutoRecordSessionState(status.lastRecordingFilename);
+      await finalizeAutoRecordMeta(status.lastRecordingFilename);
     }
     res.json({ ok: true, status });
   } catch (err) {
@@ -1284,31 +1285,73 @@ function deriveJobIdFromFilename(name) {
   return path.basename(name).replace(/\.[^.]+$/, '');
 }
 
-async function ensureAutoRecordSessionState(filename) {
+async function ensureAutoRecordSessionState(filename, metaPath = null, metaRawPath = null) {
   const jobId = deriveJobIdFromFilename(filename);
   if (!jobId) return;
   const statePath = path.join(SESSION_STATE_DIR, `${jobId}.session.json`);
+  let payload = null;
   try {
-    await fsp.access(statePath);
-    return;
+    const raw = await fsp.readFile(statePath, 'utf8');
+    payload = JSON.parse(raw);
   } catch (_) {
-    // continue
+    payload = null;
   }
   const now = Date.now();
-  const payload = {
-    jobId,
-    status: 'recorded',
-    startedAt: now,
-    stoppedAt: now,
-    errorMessage: null,
-    pids: {},
-    videoFile: filename,
-    videoPath: path.join(UPLOAD_DIR, filename),
-    videoPartPath: null,
-    metaPath: null,
-    metaRawPath: null,
-  };
+  if (!payload) {
+    payload = {
+      jobId,
+      status: 'recorded',
+      startedAt: now,
+      stoppedAt: now,
+      errorMessage: null,
+      pids: {},
+      videoFile: filename,
+      videoPath: path.join(UPLOAD_DIR, filename),
+      videoPartPath: null,
+      metaPath,
+      metaRawPath,
+    };
+  } else {
+    payload.videoFile = payload.videoFile || filename;
+    payload.videoPath = payload.videoPath || path.join(UPLOAD_DIR, filename);
+    payload.metaPath = payload.metaPath || metaPath;
+    payload.metaRawPath = payload.metaRawPath || metaRawPath;
+    payload.status = payload.status || 'recorded';
+    payload.stoppedAt = payload.stoppedAt || now;
+  }
   await fsp.writeFile(statePath, JSON.stringify(payload, null, 2));
+}
+
+async function finalizeAutoRecordMeta(filename) {
+  if (!filename) return;
+  if (lastAutoAnalyzeFilename === filename) return;
+  lastAutoAnalyzeFilename = filename;
+
+  const jobId = deriveJobIdFromFilename(filename);
+  if (!jobId) return;
+  const autoMetaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
+  const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
+  const metaRawPath = `${metaPath}.raw`;
+  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+
+  await ensureSessionDirs();
+  try {
+    await fsp.copyFile(autoMetaPath, metaRawPath);
+  } catch (err) {
+    log('Auto record meta copy failed', err.message);
+    return;
+  }
+  try {
+    await normalizeMetaFile(metaRawPath, metaPath, {
+      jobId,
+      labelMap,
+      allowedLabels: aiAllowedLabels,
+    });
+  } catch (err) {
+    log('Auto record meta normalize failed', err.message);
+  }
+  await ensureAutoRecordSessionState(filename, metaPath, metaRawPath);
+  triggerAnalyzeRequest({ jobId, filename, metaPath }).catch(() => {});
 }
 
 function parseCaptureOptions(body) {

@@ -70,6 +70,8 @@ export interface RecorderControllerOptions {
   sourceHeight?: number;
   sourceFps?: number;
   encoder?: string;
+  onRecordingStart?: () => void | Promise<void>;
+  onRecordingStop?: () => void | Promise<void>;
   videoCommands: string[];
   acquireLock: (expectedMs: number) => Promise<boolean>;
   releaseLock: () => Promise<void>;

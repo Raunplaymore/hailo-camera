@@ -107,6 +107,7 @@ let autoRecordManager = null;
 let autoRecordInitError = null;
 let lastAutoAnalyzeFilename = null;
 let autoRecordPipelineHeld = false;
+let autoRecordRecordingHeld = false;
 
 const AUTO_RECORD_CONFIG = {
   addressStillMs: parseInt(process.env.AUTO_ADDRESS_STILL_MS, 10) || 2000,
@@ -241,6 +242,18 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
       autoRecordPipelineHeld = false;
       sharedPipeline.release('auto-record-guard');
     };
+    const retainAutoRecordRecording = () => {
+      if (autoRecordRecordingHeld) return;
+      autoRecordRecordingHeld = true;
+      sharedPipeline
+        .retain('auto-record', autoRecordSourceConfig)
+        .catch((err) => log('AutoRecord recording retain failed', err.message));
+    };
+    const releaseAutoRecordRecording = () => {
+      if (!autoRecordRecordingHeld) return;
+      autoRecordRecordingHeld = false;
+      sharedPipeline.release('auto-record');
+    };
     autoRecordManager = new AutoRecordManager({
       recorder: new RecorderController({
         uploadDir: UPLOAD_DIR,
@@ -254,6 +267,8 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         sourceHeight: SESSION_DEFAULTS.height,
         sourceFps: SESSION_DEFAULTS.fps,
         encoder: SESSION_RECORD_ENCODER,
+        onRecordingStart: retainAutoRecordRecording,
+        onRecordingStop: releaseAutoRecordRecording,
         videoCommands: VIDEO_COMMANDS,
         libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
         acquireLock: tryAcquireLock,
@@ -286,6 +301,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         }
         if (state === 'failed' || state === 'idle') {
           releaseAutoRecordPipeline();
+          releaseAutoRecordRecording();
         }
       },
       logger: (...args) => log(...args),

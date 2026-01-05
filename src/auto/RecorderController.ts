@@ -42,6 +42,9 @@ export class RecorderController implements RecorderAdapter {
     const tempPath = `${finalPath}.part`;
     await fsp.mkdir(path.dirname(finalPath), { recursive: true });
     await fsp.unlink(tempPath).catch(() => undefined);
+    if (this.options.onRecordingStart) {
+      await this.options.onRecordingStart();
+    }
     const mode = this.options.mode || 'camera';
     const args = mode === 'shm' ? this.buildShmArgs(tempPath) : this.buildArgs(tempPath);
     const child = mode === 'shm' ? await this.spawnGstRecorder(args) : await this.spawnRecorder(args);
@@ -54,6 +57,11 @@ export class RecorderController implements RecorderAdapter {
       if (this.lockHeld) {
         this.options.releaseLock().catch((err) => this.log('releaseLock failed', err));
         this.lockHeld = false;
+      }
+      if (this.options.onRecordingStop) {
+        Promise.resolve(this.options.onRecordingStop()).catch((err) =>
+          this.log('onRecordingStop failed', err)
+        );
       }
       if (code !== 0 && !this.stopping) {
         this.log('Recorder exited unexpectedly', code);

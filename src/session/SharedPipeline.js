@@ -42,6 +42,7 @@ class SharedPipeline {
     }
     await this.ensureRunning(config);
     this.users[type] += 1;
+    this.logger('shared pipeline retain', type, this.users[type]);
   }
 
   release(type) {
@@ -49,6 +50,7 @@ class SharedPipeline {
       this.users[type] = 0;
     }
     this.users[type] = Math.max(0, this.users[type] - 1);
+    this.logger('shared pipeline release', type, this.users[type]);
     this.maybeStop();
   }
 
@@ -154,6 +156,7 @@ class SharedPipeline {
 
   maybeStop() {
     const total = Object.values(this.users).reduce((sum, value) => sum + value, 0);
+    this.logger('shared pipeline users total', total, this.users);
     if (total === 0) {
       this.stopPipeline('idle');
     }

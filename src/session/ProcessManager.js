@@ -30,6 +30,8 @@ class ProcessManager {
     this.inferenceSocketPath = options.inferenceSocketPath || options.socketPath || '/tmp/hailo_camera_infer.shm';
     this.currentSession = null;
     this.signalHandlersRegistered = false;
+    this.zombieCleanupTimer = null;
+    this.startZombieCleanupTimer();
   }
 
   registerSignalHandlers() {
@@ -37,12 +39,62 @@ class ProcessManager {
     this.signalHandlersRegistered = true;
     process.on('SIGINT', () => {
       this.logger('ProcessManager SIGINT - stopping active session');
+      this.cleanup();
       this.stopSession(this.currentSession?.jobId, 'sigint').catch(() => {});
     });
     process.on('SIGTERM', () => {
       this.logger('ProcessManager SIGTERM - stopping active session');
+      this.cleanup();
       this.stopSession(this.currentSession?.jobId, 'sigterm').catch(() => {});
     });
+  }
+
+  startZombieCleanupTimer() {
+    // 1분마다 좀비 프로세스 정리
+    this.zombieCleanupTimer = setInterval(() => {
+      this.cleanupZombieProcesses();
+    }, 60000);
+    // Node.js가 이 타이머 때문에 종료되지 않도록
+    if (this.zombieCleanupTimer.unref) {
+      this.zombieCleanupTimer.unref();
+    }
+  }
+
+  cleanupZombieProcesses() {
+    const session = this.currentSession;
+    if (!session) return;
+
+    const checkProcess = (proc, label) => {
+      if (!proc) return false;
+      if (proc.exitCode !== null) return false;
+      if (!proc.pid) {
+        this.logger(`Zombie detected: ${label} has no PID`);
+        return true;
+      }
+      if (proc.killed && !this.isPidAlive(proc.pid)) {
+        this.logger(`Zombie detected: ${label} marked as killed but still in process list`);
+        return true;
+      }
+      return false;
+    };
+
+    const recordZombie = checkProcess(session.record, 'record');
+    const inferenceZombie = checkProcess(session.inference, 'inference');
+
+    if (recordZombie || inferenceZombie) {
+      this.logger('Cleaning up zombie processes in session', session.jobId);
+      // 좀비가 감지되면 세션을 안전하게 종료
+      if (session.status === 'running') {
+        this.failSession(session, 'Zombie process detected, forcing cleanup');
+      }
+    }
+  }
+
+  cleanup() {
+    if (this.zombieCleanupTimer) {
+      clearInterval(this.zombieCleanupTimer);
+      this.zombieCleanupTimer = null;
+    }
   }
 
   async startSession(options) {
@@ -255,6 +307,7 @@ class ProcessManager {
     if (!child || child.exitCode !== null) return;
     return new Promise((resolve) => {
       let settled = false;
+      const pid = child.pid;
       const isAlive = () => {
         if (!child || child.exitCode !== null) return false;
         if (!child.pid) return false;
@@ -271,11 +324,13 @@ class ProcessManager {
         clearTimeout(termTimer);
         clearTimeout(killTimer);
         clearTimeout(forceTimer);
+        clearTimeout(lastResortTimer);
         resolve();
       };
       child.once('close', finalize);
       try {
         child.kill(signal);
+        this.logger(`${label} sent ${signal}`);
       } catch (err) {
         this.logger(`${label} kill error`, err.message);
         finalize();
@@ -283,20 +338,34 @@ class ProcessManager {
       }
       const termTimer = setTimeout(() => {
         if (isAlive()) {
+          this.logger(`${label} escalating to SIGTERM`);
           child.kill('SIGTERM');
         }
       }, 2000);
       const killTimer = setTimeout(() => {
         if (isAlive()) {
+          this.logger(`${label} escalating to SIGKILL`);
           child.kill('SIGKILL');
         }
       }, 5000);
       const forceTimer = setTimeout(() => {
         if (isAlive()) {
-          this.logger(`${label} still alive after timeout`);
+          this.logger(`${label} still alive after SIGKILL, trying direct PID kill`);
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch (err) {
+            this.logger(`${label} direct PID kill failed:`, err.message);
+          }
+        }
+      }, 7000);
+      const lastResortTimer = setTimeout(() => {
+        if (isAlive()) {
+          this.logger(`${label} CRITICAL: process ${pid} did not terminate after all attempts`);
+          // 프로세스가 정말 안 죽으면 경고하고 계속 진행
+          // 실제 환경에서는 시스템 관리자에게 알림을 보내는 것이 좋음
         }
         finalize();
-      }, 7000);
+      }, 10000);
     });
   }
 
@@ -310,6 +379,10 @@ class ProcessManager {
     if (session.status !== 'running') return;
     session.status = status;
     session.stoppedAt = Date.now();
+
+    // 상태 검증: 프로세스가 정말 종료되었는지 확인
+    this.validateProcessTermination(session);
+
     this.writeState(session).catch(() => {});
     this.releaseLock().catch(() => {});
     const finalizePromise = this.finalizeVideo(session).catch((err) => {
@@ -327,6 +400,30 @@ class ProcessManager {
       .catch((err) => {
         this.logger('Session finish handler failed', err.message);
       });
+  }
+
+  validateProcessTermination(session) {
+    // 프로세스가 실제로 종료되었는지 확인
+    const processes = [
+      { proc: session.record, label: 'record' },
+      { proc: session.inference, label: 'inference' },
+    ];
+
+    for (const { proc, label } of processes) {
+      if (!proc) continue;
+
+      if (proc.exitCode === null && proc.pid) {
+        if (this.isPidAlive(proc.pid)) {
+          this.logger(`WARNING: ${label} process ${proc.pid} still alive after session finish`);
+          // 마지막 시도로 SIGKILL
+          try {
+            process.kill(proc.pid, 'SIGKILL');
+          } catch (err) {
+            this.logger(`Failed to kill lingering ${label} process:`, err.message);
+          }
+        }
+      }
+    }
   }
 
   async defaultEnsureUploadsDir() {

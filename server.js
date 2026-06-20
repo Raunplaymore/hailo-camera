@@ -134,6 +134,76 @@ const aiPreviewSessions = new Map();
 let previewSessionCounter = 0;
 let aiPreviewSessionCounter = 0;
 
+function isProcessAlive(child) {
+  if (!child || child.exitCode !== null || !child.pid) return false;
+  try {
+    process.kill(child.pid, 0);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function sendProcessSignal(child, label, signal) {
+  if (!isProcessAlive(child)) return false;
+  try {
+    child.kill(signal);
+    log(`${label} sent ${signal}`);
+    return true;
+  } catch (err) {
+    log(`${label} ${signal} failed:`, err.message);
+    return false;
+  }
+}
+
+async function terminateStreamProcess(child, label, initialSignal = 'SIGINT') {
+  if (!isProcessAlive(child)) return;
+
+  const pid = child.pid;
+  await new Promise((resolve) => {
+    let settled = false;
+    const timers = [];
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      timers.forEach((timer) => clearTimeout(timer));
+      resolve();
+    };
+
+    child.once('close', finish);
+    sendProcessSignal(child, label, initialSignal);
+
+    timers.push(setTimeout(() => {
+      sendProcessSignal(child, label, 'SIGTERM');
+    }, 2000));
+
+    timers.push(setTimeout(() => {
+      sendProcessSignal(child, label, 'SIGKILL');
+    }, 5000));
+
+    timers.push(setTimeout(() => {
+      if (!isProcessAlive(child)) return;
+      log(`${label} still alive after SIGKILL, trying direct PID kill`, pid);
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (err) {
+        log(`${label} direct PID kill failed:`, err.message);
+      }
+    }, 7000));
+
+    timers.push(setTimeout(() => {
+      if (isProcessAlive(child)) {
+        log(`${label} CRITICAL: process ${pid} did not terminate after all attempts`);
+      }
+      finish();
+    }, 10000));
+  });
+}
+
+function isFatalAiPreviewOutput(text) {
+  return /CHECK_EXPECTED failed|HAILO_OUT_OF_PHYSICAL_DEVICES|Caught SIGSEGV|Spinning|Failed to create vdevice/i.test(text);
+}
+
 // 녹화+추론 세션 관리자
 const sessionManager = new ProcessManager({
   uploadDir: UPLOAD_DIR,
@@ -200,7 +270,7 @@ class AutoRecordDetector {
 
   async stop() {
     if (this.proc && this.proc.exitCode === null) {
-      this.proc.kill('SIGINT');
+      await terminateStreamProcess(this.proc, 'auto-detect', 'SIGINT');
     }
     this.proc = null;
     if (this.retained) {
@@ -844,7 +914,9 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     );
     log(`MJPEG stream cleanup (${reason})`);
     if (previewProc && previewProc.exitCode === null) {
-      previewProc.kill('SIGINT');
+      terminateStreamProcess(previewProc, `preview ${previewId}`, 'SIGINT').catch((err) => {
+        log(`preview ${previewId} terminate failed:`, err.message);
+      });
     }
     if (!res.writableEnded) {
       res.end();
@@ -946,7 +1018,9 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     setStreamingState(previewSessions.size + aiPreviewSessions.size > 0, previewSessions.size + aiPreviewSessions.size);
     log(`AI MJPEG stream cleanup (${reason})`);
     if (previewProc && previewProc.exitCode === null) {
-      previewProc.kill('SIGINT');
+      terminateStreamProcess(previewProc, `ai preview ${previewId}`, 'SIGINT').catch((err) => {
+        log(`ai preview ${previewId} terminate failed:`, err.message);
+      });
     }
     if (!res.writableEnded) {
       res.end();
@@ -954,12 +1028,22 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
   };
 
   previewProc.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (isFatalAiPreviewOutput(text)) {
+      log('ai preview fatal stdout:', text.trim());
+      cleanup('ai_preview_fatal_stdout');
+      return;
+    }
     if (!res.writableEnded) {
       res.write(chunk);
     }
   });
   previewProc.stderr.on('data', (data) => {
-    log('ai preview stderr:', data.toString());
+    const text = data.toString();
+    log('ai preview stderr:', text);
+    if (isFatalAiPreviewOutput(text)) {
+      cleanup('ai_preview_fatal_stderr');
+    }
   });
   previewProc.on('error', (err) => {
     log('ai preview process error:', err.message);
@@ -981,19 +1065,21 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
 });
 
 // 스트림 강제 종료
-app.post('/api/camera/stream/stop', (_req, res) => {
+app.post('/api/camera/stream/stop', async (_req, res) => {
   const hadPreview = previewSessions.size > 0;
   const hadAiPreview = aiPreviewSessions.size > 0;
+  const terminateTasks = [];
   if (previewSessions.size > 0) {
     const count = previewSessions.size;
     for (const [id, session] of previewSessions.entries()) {
-      if (session && session.proc && session.proc.exitCode === null) {
-        session.proc.kill('SIGINT');
-      }
+      const terminateTask = session && session.proc
+        ? terminateStreamProcess(session.proc, `preview ${id}`, 'SIGINT')
+        : Promise.resolve();
       if (session && session.res && !session.res.writableEnded) {
         session.res.end();
       }
       previewSessions.delete(id);
+      terminateTasks.push(terminateTask);
     }
     for (let i = 0; i < count; i += 1) {
       sharedPipeline.release('preview');
@@ -1003,13 +1089,14 @@ app.post('/api/camera/stream/stop', (_req, res) => {
   if (aiPreviewSessions.size > 0) {
     const count = aiPreviewSessions.size;
     for (const [id, session] of aiPreviewSessions.entries()) {
-      if (session && session.proc && session.proc.exitCode === null) {
-        session.proc.kill('SIGINT');
-      }
+      const terminateTask = session && session.proc
+        ? terminateStreamProcess(session.proc, `ai preview ${id}`, 'SIGINT')
+        : Promise.resolve();
       if (session && session.res && !session.res.writableEnded) {
         session.res.end();
       }
       aiPreviewSessions.delete(id);
+      terminateTasks.push(terminateTask);
     }
     for (let i = 0; i < count; i += 1) {
       sharedPipeline.release('ai-preview');
@@ -1019,6 +1106,12 @@ app.post('/api/camera/stream/stop', (_req, res) => {
     previewSessions.size + aiPreviewSessions.size > 0,
     previewSessions.size + aiPreviewSessions.size,
   );
+  const results = await Promise.allSettled(terminateTasks);
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      log('stream stop terminate task failed:', result.reason?.message || result.reason);
+    }
+  }
   const stopped = hadPreview || hadAiPreview;
   return res.json({ ok: true, stopped });
 });

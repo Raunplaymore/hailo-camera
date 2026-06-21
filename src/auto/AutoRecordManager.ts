@@ -200,7 +200,7 @@ export class AutoRecordManager {
       } catch (err) {
         this.log('Detection tick failed', (err as Error).message);
       } finally {
-        if (this.state !== 'idle' && this.state !== 'failed') {
+        if (this.isActive()) {
           this.pollHandle = setTimeout(tick, this.config.pollIntervalMs);
         }
       }

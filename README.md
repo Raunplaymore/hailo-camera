@@ -36,7 +36,7 @@ npm start            # PORT=3001 default
 | `META_DIR` | 메타 json 경로 (default `/tmp`) |
 | `SESSION_LABEL_MAP` | classId→label 매핑 (`0:golf_ball,1:clubhead` 또는 JSON) |
 | `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s.hef`) |
-| `AI_POSTPROCESS_CONFIG` | Hailo postprocess config 경로 (default `config/yolov8s_nms.json`) |
+| `AI_POSTPROCESS_CONFIG` | Hailo postprocess config 경로 (default `config/yolov8s_nms_golf.json`) |
 | `AUTO_ADDRESS_STILL_MS` | 자동 촬영: 어드레스 안정 지속 시간(ms, default `2000`) |
 | `AUTO_ADDRESS_MAX_CENTER_PX` | 자동 촬영: 중심 이동 허용(px, default `14`) |
 | `AUTO_ADDRESS_MAX_AREA_RATIO` | 자동 촬영: bbox 면적 변화 허용 비율(default `0.12`) |

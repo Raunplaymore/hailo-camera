@@ -79,7 +79,7 @@ const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s.hef';
 const AI_CONFIG_DIR = path.join(__dirname, 'config');
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
-  || path.join(AI_CONFIG_DIR, 'yolov8s_nms.json');
+  || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
 let aiPostprocessConfig = DEFAULT_AI_CONFIG;
 let aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
@@ -466,13 +466,11 @@ app.get('/api/camera/status', async (_req, res) => {
 });
 
 // 자동 녹화 상태 조회
-app.get('/api/camera/auto-record/status', (_req, res) => {
+app.get('/api/camera/auto-record/status', async (_req, res) => {
   try {
     const status = getAutoRecordStatus();
     if (status.state === 'idle' && status.lastRecordingFilename) {
-      finalizeAutoRecordMeta(status.lastRecordingFilename).catch((err) =>
-        log('Auto record finalize failed', err.message)
-      );
+      await finalizeAutoRecordMeta(status.lastRecordingFilename);
     }
     res.json({ ok: true, status });
   } catch (err) {
@@ -1711,6 +1709,9 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
   if (!ANALYZE_URL) return;
   const payload = {
     jobId,
+    filename,
+    metaPath,
+    force: Boolean(force),
     mode: 'coach_from_meta',
     source: {
       metaPath,

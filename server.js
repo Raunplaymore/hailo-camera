@@ -106,6 +106,7 @@ let lastStreamStateChange = null;
 let autoRecordManager = null;
 let autoRecordInitError = null;
 let lastAutoAnalyzeFilename = null;
+let lastAutoAnalyzeMetaPath = null;
 let autoRecordPipelineHeld = false;
 let autoRecordRecordingHeld = false;
 
@@ -469,10 +470,11 @@ app.get('/api/camera/status', async (_req, res) => {
 app.get('/api/camera/auto-record/status', async (_req, res) => {
   try {
     const status = getAutoRecordStatus();
+    let lastRecordingMetaPath = status.lastRecordingMetaPath || null;
     if (status.state === 'idle' && status.lastRecordingFilename) {
-      await finalizeAutoRecordMeta(status.lastRecordingFilename);
+      lastRecordingMetaPath = await finalizeAutoRecordMeta(status.lastRecordingFilename);
     }
-    res.json({ ok: true, status });
+    res.json({ ok: true, status: { ...status, lastRecordingMetaPath } });
   } catch (err) {
     log('Auto record status error', err.message || err);
     res.status(200).json({
@@ -530,10 +532,11 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   if (!manager) return;
   try {
     const status = await manager.stop('user');
+    let lastRecordingMetaPath = status.lastRecordingMetaPath || null;
     if (status.lastRecordingFilename) {
-      await finalizeAutoRecordMeta(status.lastRecordingFilename);
+      lastRecordingMetaPath = await finalizeAutoRecordMeta(status.lastRecordingFilename);
     }
-    res.json({ ok: true, status });
+    res.json({ ok: true, status: { ...status, lastRecordingMetaPath } });
   } catch (err) {
     const statusCode = err.status === 409 ? 409 : 200;
     res.status(statusCode).json({
@@ -1430,12 +1433,13 @@ async function ensureAutoRecordSessionState(filename, metaPath = null, metaRawPa
 }
 
 async function finalizeAutoRecordMeta(filename) {
-  if (!filename) return;
-  if (lastAutoAnalyzeFilename === filename) return;
-  lastAutoAnalyzeFilename = filename;
+  if (!filename) return null;
+  if (lastAutoAnalyzeFilename === filename && lastAutoAnalyzeMetaPath) {
+    return lastAutoAnalyzeMetaPath;
+  }
 
   const jobId = deriveJobIdFromFilename(filename);
-  if (!jobId) return;
+  if (!jobId) return null;
   const autoMetaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
@@ -1446,7 +1450,7 @@ async function finalizeAutoRecordMeta(filename) {
     await fsp.copyFile(autoMetaPath, metaRawPath);
   } catch (err) {
     log('Auto record meta copy failed', err.message);
-    return;
+    return null;
   }
   try {
     await normalizeMetaFile(metaRawPath, metaPath, {
@@ -1456,9 +1460,19 @@ async function finalizeAutoRecordMeta(filename) {
     });
   } catch (err) {
     log('Auto record meta normalize failed', err.message);
+    return null;
+  }
+  try {
+    await fsp.access(metaPath);
+  } catch (err) {
+    log('Auto record normalized meta missing', err.message);
+    return null;
   }
   await ensureAutoRecordSessionState(filename, metaPath, metaRawPath);
+  lastAutoAnalyzeFilename = filename;
+  lastAutoAnalyzeMetaPath = metaPath;
   triggerAnalyzeRequest({ jobId, filename, metaPath }).catch(() => {});
+  return metaPath;
 }
 
 function parseCaptureOptions(body) {
@@ -1573,6 +1587,8 @@ function getAutoRecordStatus() {
     state: 'idle',
     startedAt: null,
     recordingFilename: null,
+    lastRecordingFilename: null,
+    lastRecordingMetaPath: null,
     lastError: autoRecordInitError ? autoRecordInitError.message : 'auto record disabled',
   };
 }
@@ -1593,6 +1609,7 @@ function getFallbackStatus() {
     startedAt: null,
     recordingFilename: null,
     lastRecordingFilename: null,
+    lastRecordingMetaPath: null,
     lastError: 'Auto record unavailable',
   };
 }

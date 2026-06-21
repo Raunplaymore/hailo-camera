@@ -13,6 +13,7 @@ export interface AutoRecordStatus {
   startedAt: string | null;
   recordingFilename: string | null;
   lastRecordingFilename?: string | null;
+  lastRecordingMetaPath?: string | null;
   lastError: string | null;
 }
 

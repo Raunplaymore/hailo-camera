@@ -54,7 +54,7 @@ pwdx $(pgrep -f "node.*server.js" | head -1)
 | `HAILO_HEF_PATH` | Hailo HEF 경로 (default `/usr/share/hailo-models/yolov8s.hef`) |
 | `HAILO_INFERENCE_WIDTH` / `HAILO_INFERENCE_HEIGHT` | Hailo 입력 크기 (default 640×640) |
 | `HAILO_POSTPROCESS_LIB` | Hailo postprocess 공유 라이브러리 (default `libyolo_hailortpp_post.so`) |
-| `HAILO_POSTPROCESS_FUNC` | 세션/파일 추론용 postprocess 함수명 (default `yolov8s`) |
+| `HAILO_POSTPROCESS_FUNC` | 세션/파일 추론용 postprocess 함수명 (PM2 service7 default `filter`) |
 | `HAILO_PREVIEW_POSTPROCESS_FUNC` | AI 프리뷰용 postprocess 함수명 (default `filter`) |
 | `AI_POSTPROCESS_CONFIG` | Hailo postprocess config 경로 (default `config/yolov8s_nms_golf.json`) |
 | `AUTO_ADDRESS_STILL_MS` | 자동 촬영: 어드레스 안정 지속 시간(ms, default `2000`) |
@@ -261,12 +261,12 @@ export HAILO_MODEL_NAME=yolov8n_service7
 export HAILO_HEF_PATH=/usr/share/hailo-models/yolov8n_service7_960.hef
 export HAILO_INFERENCE_WIDTH=960
 export HAILO_INFERENCE_HEIGHT=960
-export HAILO_POSTPROCESS_FUNC=yolov8s
+export HAILO_POSTPROCESS_FUNC=filter
 export AI_POSTPROCESS_CONFIG=/home/ray/hailo-camera/config/yolov8n_service7_nms.json
 export SESSION_LABEL_MAP=0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle
 ```
 
-Hailo postprocess 라이브러리가 커스텀 모델 전용 함수명을 요구하면 `HAILO_POSTPROCESS_FUNC`만 해당 함수명으로 바꾸면 됩니다. DFC compile 시 `net_name`을 바꾸면 `config/yolov8n_service7_nms.json`의 `output_layer`도 같은 이름으로 맞춰야 합니다.
+`filter` 함수는 `config/yolov8n_service7_nms.json`의 `output_layer` 값을 사용하므로, DFC compile 시 `net_name`을 바꾸면 config의 `output_layer`도 같은 이름으로 맞춰야 합니다. 특정 Hailo postprocess 함수가 필요할 때만 `HAILO_POSTPROCESS_FUNC`를 해당 함수명으로 바꿉니다.
 
 3클래스 MVP 모델을 fallback으로 쓸 때만 `yolov8n_golf3_960.hef`, `config/yolov8n_golf3_nms.json`, `SESSION_LABEL_MAP=0:person,1:golf_ball,2:club_head` 조합으로 바꿉니다.
 

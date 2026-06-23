@@ -22,7 +22,7 @@ module.exports = {
         HAILO_INFERENCE_WIDTH: process.env.HAILO_INFERENCE_WIDTH || '960',
         HAILO_INFERENCE_HEIGHT: process.env.HAILO_INFERENCE_HEIGHT || '960',
         HAILO_POSTPROCESS_LIB: process.env.HAILO_POSTPROCESS_LIB || 'libyolo_hailortpp_post.so',
-        HAILO_POSTPROCESS_FUNC: process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s',
+        HAILO_POSTPROCESS_FUNC: process.env.HAILO_POSTPROCESS_FUNC || 'filter',
         HAILO_PREVIEW_POSTPROCESS_FUNC: process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter',
         AI_POSTPROCESS_CONFIG: process.env.AI_POSTPROCESS_CONFIG || '/home/ray/hailo-camera/config/yolov8n_service7_nms.json',
         SESSION_LABEL_MAP: process.env.SESSION_LABEL_MAP || '0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle',

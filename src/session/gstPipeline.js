@@ -7,10 +7,7 @@ const DEFAULTS = {
 };
 
 function resolveModelOptions(model, overrides = {}) {
-  const resolvedModel = model || 'yolov8s';
-  if (resolvedModel !== 'yolov8s') {
-    throw new Error(`Unsupported model: ${resolvedModel}`);
-  }
+  const resolvedModel = model || overrides.model || 'yolov8s';
   return { ...DEFAULTS, ...overrides, model: resolvedModel };
 }
 

@@ -77,6 +77,22 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
 const ANALYZE_URL = process.env.ANALYZE_URL || 'http://127.0.0.1:3000/api/analyze/from-file';
 const STREAM_TOKEN = process.env.STREAM_TOKEN || '';
 const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yolov8s.hef';
+const HAILO_MODEL_NAME = String(process.env.HAILO_MODEL_NAME || process.env.HAILO_MODEL || 'yolov8s')
+  .trim()
+  .toLowerCase();
+const HAILO_MODEL_ALIASES = new Set([
+  HAILO_MODEL_NAME,
+  'yolov8s',
+  ...String(process.env.HAILO_MODEL_ALIASES || '')
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean),
+]);
+const HAILO_INFERENCE_WIDTH = parsePositiveNumber(process.env.HAILO_INFERENCE_WIDTH, 640);
+const HAILO_INFERENCE_HEIGHT = parsePositiveNumber(process.env.HAILO_INFERENCE_HEIGHT, 640);
+const HAILO_POSTPROCESS_LIB = process.env.HAILO_POSTPROCESS_LIB || 'libyolo_hailortpp_post.so';
+const HAILO_POSTPROCESS_FUNC = process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s';
+const HAILO_PREVIEW_POSTPROCESS_FUNC = process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter';
 const AI_CONFIG_DIR = path.join(__dirname, 'config');
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
@@ -218,7 +234,7 @@ const sessionManager = new ProcessManager({
   pipeline: sharedPipeline,
   recordSocketPath: SHARED_PIPELINE_SOCKET_RECORD,
   inferenceSocketPath: SHARED_PIPELINE_SOCKET_INFER,
-  defaultModelOptions: { hefPath: HAILO_HEF_PATH, postProcessConfig: aiPostprocessConfig },
+  defaultModelOptions: buildHailoModelOptions(),
   ensureUploadsDir: ensureSessionDirs,
   logger: (...args) => log(...args),
   onSessionFinished: async (session) => {
@@ -253,7 +269,7 @@ class AutoRecordDetector {
       height: this.sourceConfig.height,
       fps: this.sourceConfig.fps,
       metaPath: this.metaPath,
-      model: 'yolov8s',
+      model: modelOptions.model || HAILO_MODEL_NAME,
       modelOptions,
     });
     this.logger('AutoRecord detector start', `${this.gstCmd} ${args.join(' ')}`);
@@ -358,10 +374,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
           fps: SESSION_DEFAULTS.fps,
         },
         metaPath: path.join(SESSION_META_DIR, 'auto_record.meta.json'),
-        modelOptionsProvider: () => ({
-          hefPath: HAILO_HEF_PATH,
-          postProcessConfig: aiPostprocessConfig,
-        }),
+        modelOptionsProvider: () => buildHailoModelOptions(),
         labelMapProvider: () => parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
         logger: (...args) => log(...args),
       }),
@@ -827,7 +840,7 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
       format: options.format,
       inputPath: path.join(UPLOAD_DIR, filename),
       metaRawPath,
-      model: 'yolov8s',
+      model: HAILO_MODEL_NAME,
       durationSec: options.durationSec,
     });
     await normalizeMetaFile(metaRawPath, metaPath, {
@@ -990,12 +1003,11 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     width: streamOptions.width,
     height: streamOptions.height,
     fps: streamOptions.fps,
-    model: 'yolov8s',
-    modelOptions: {
-      hefPath: HAILO_HEF_PATH,
-      postProcessFunc: 'filter',
+    model: HAILO_MODEL_NAME,
+    modelOptions: buildHailoModelOptions({
+      postProcessFunc: HAILO_PREVIEW_POSTPROCESS_FUNC,
       postProcessConfig: requestedConfigPath || aiPostprocessConfig,
-    },
+    }),
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   aiPreviewSessions.set(previewId, { proc: previewProc, res });
@@ -1173,6 +1185,30 @@ function parseLabelMap(raw) {
   return map;
 }
 
+function buildHailoModelOptions(overrides = {}) {
+  return {
+    model: HAILO_MODEL_NAME,
+    inferenceWidth: HAILO_INFERENCE_WIDTH,
+    inferenceHeight: HAILO_INFERENCE_HEIGHT,
+    hefPath: HAILO_HEF_PATH,
+    postProcessLib: HAILO_POSTPROCESS_LIB,
+    postProcessFunc: HAILO_POSTPROCESS_FUNC,
+    postProcessConfig: aiPostprocessConfig,
+    ...overrides,
+  };
+}
+
+function normalizeRequestedModel(model) {
+  const requested = String(model || HAILO_MODEL_NAME).trim().toLowerCase();
+  if (!/^[a-z0-9_.-]+$/.test(requested)) {
+    throw httpError('Invalid model name', 400);
+  }
+  if (!HAILO_MODEL_ALIASES.has(requested)) {
+    throw httpError(`Invalid model. Use ${HAILO_MODEL_NAME}`, 400);
+  }
+  return HAILO_MODEL_NAME;
+}
+
 function normalizeAllowedLabels(allowedLabels) {
   if (!allowedLabels) return null;
   if (allowedLabels instanceof Set) return allowedLabels.size ? allowedLabels : null;
@@ -1269,7 +1305,7 @@ function setAiConfigByName(name) {
   aiPostprocessConfig = path.join(AI_CONFIG_DIR, safeName);
   aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
   if (sessionManager?.defaultModelOptions) {
-    sessionManager.defaultModelOptions.postProcessConfig = aiPostprocessConfig;
+    sessionManager.defaultModelOptions = buildHailoModelOptions();
   }
   return { name: safeName, path: aiPostprocessConfig };
 }
@@ -1279,10 +1315,7 @@ function parseSessionOptions(body) {
   const height = parsePositiveNumber(body.height, SESSION_DEFAULTS.height);
   const fps = parsePositiveNumber(body.fps, SESSION_DEFAULTS.fps);
   const durationSec = parseNonNegativeNumber(body.durationSec, 0);
-  const model = (body.model || 'yolov8s').toLowerCase();
-  if (model !== 'yolov8s') {
-    throw httpError('Invalid model. Use yolov8s', 400);
-  }
+  const model = normalizeRequestedModel(body.model);
   return { width, height, fps, durationSec, model };
 }
 
@@ -1701,7 +1734,7 @@ async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, 
     inputPath,
     metaPath: metaRawPath,
     model,
-      modelOptions: { hefPath: HAILO_HEF_PATH, postProcessConfig: aiPostprocessConfig },
+    modelOptions: buildHailoModelOptions(),
   });
   const timeoutMs = computeAnalyzeTimeout(format, durationSec);
   logCommand(SESSION_GST_CMD, gstArgs);

@@ -135,6 +135,8 @@ class ProcessManager {
       statePath,
       model: options.model || modelOptions.model || null,
       modelOptions,
+      durationSec,
+      stopTimer: null,
       record: null,
       inference: null,
       pids: {},
@@ -182,6 +184,16 @@ class ProcessManager {
       };
       await this.writeLock({ jobId, startedAt: session.startedAt, pids: session.pids });
       await this.writeState(session);
+      if (durationSec > 0) {
+        session.stopTimer = setTimeout(() => {
+          this.stopSession(jobId, 'duration').catch((err) => {
+            this.logger(`Failed to stop session ${jobId} after duration`, err.message);
+          });
+        }, durationSec * 1000);
+        if (session.stopTimer.unref) {
+          session.stopTimer.unref();
+        }
+      }
     } catch (err) {
       if (retained && this.pipeline) {
         this.pipeline.release('session');
@@ -248,6 +260,7 @@ class ProcessManager {
       pids: session.pids,
       model: session.model,
       modelOptions: session.modelOptions,
+      durationSec: session.durationSec,
     };
   }
 
@@ -384,6 +397,10 @@ class ProcessManager {
     if (session.status !== 'running') return;
     session.status = status;
     session.stoppedAt = Date.now();
+    if (session.stopTimer) {
+      clearTimeout(session.stopTimer);
+      session.stopTimer = null;
+    }
 
     // 상태 검증: 프로세스가 정말 종료되었는지 확인
     this.validateProcessTermination(session);
@@ -445,6 +462,7 @@ class ProcessManager {
       pids: session.pids,
       model: session.model,
       modelOptions: session.modelOptions,
+      durationSec: session.durationSec,
       videoFile: session.videoFile,
       videoPath: session.videoPath,
       videoPartPath: session.videoPartPath,

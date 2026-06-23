@@ -24,7 +24,7 @@ module.exports = {
         HAILO_POSTPROCESS_LIB: process.env.HAILO_POSTPROCESS_LIB || 'libyolo_hailortpp_post.so',
         HAILO_POSTPROCESS_FUNC: process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s',
         HAILO_PREVIEW_POSTPROCESS_FUNC: process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter',
-        AI_POSTPROCESS_CONFIG: process.env.AI_POSTPROCESS_CONFIG || '/home/ray/hailo-camera/config/yolov8s_nms_golf.json',
+        AI_POSTPROCESS_CONFIG: process.env.AI_POSTPROCESS_CONFIG || '',
         SESSION_LABEL_MAP: process.env.SESSION_LABEL_MAP || '',
         GST_PLUGIN_PATH: "/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
         LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes:/usr/lib/aarch64-linux-gnu:/usr/lib",

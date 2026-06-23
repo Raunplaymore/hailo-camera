@@ -80,9 +80,11 @@ const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yo
 const HAILO_MODEL_NAME = String(process.env.HAILO_MODEL_NAME || process.env.HAILO_MODEL || 'yolov8s')
   .trim()
   .toLowerCase();
+const SERVICE7_MODEL_NAME = 'yolov8n_service7';
 const HAILO_MODEL_ALIASES = new Set([
   HAILO_MODEL_NAME,
   'yolov8s',
+  SERVICE7_MODEL_NAME,
   ...String(process.env.HAILO_MODEL_ALIASES || '')
     .split(',')
     .map((name) => name.trim().toLowerCase())
@@ -94,9 +96,15 @@ const HAILO_POSTPROCESS_LIB = process.env.HAILO_POSTPROCESS_LIB || 'libyolo_hail
 const HAILO_POSTPROCESS_FUNC = process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s';
 const HAILO_PREVIEW_POSTPROCESS_FUNC = process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter';
 const AI_CONFIG_DIR = path.join(__dirname, 'config');
+const SERVICE7_HEF_PATH = process.env.SERVICE7_HEF_PATH
+  || '/usr/share/hailo-models/yolov8n_service7_960.hef';
+const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
+  || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
+const SERVICE7_LABEL_MAP = '0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle';
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
 let aiPostprocessConfig = DEFAULT_AI_CONFIG;
+let aiLabelMap = readAiConfigLabelMap(aiPostprocessConfig);
 let aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
@@ -301,8 +309,8 @@ class AutoRecordDetector {
     try {
       const text = await readTail(this.metaPath, tailBytes);
       const frames = parseTailFrames(text, 5);
-      const labelMap = this.labelMapProvider ? this.labelMapProvider() : {};
-      const normalized = applyLabelMap(frames, labelMap, aiAllowedLabels);
+      const metaOptions = this.labelMapProvider ? this.labelMapProvider() : {};
+      const normalized = applyLabelMap(frames, metaOptions.labelMap || {}, metaOptions.allowedLabels);
       return normalized.length ? normalized[normalized.length - 1] : null;
     } catch (err) {
       return null;
@@ -375,7 +383,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         },
         metaPath: path.join(SESSION_META_DIR, 'auto_record.meta.json'),
         modelOptionsProvider: () => buildHailoModelOptions(),
-        labelMapProvider: () => parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
+        labelMapProvider: () => getModelMetaOptions(buildHailoModelOptions()),
         logger: (...args) => log(...args),
       }),
       config: AUTO_RECORD_CONFIG,
@@ -569,11 +577,15 @@ app.get('/api/camera/auto-record/live', async (req, res) => {
   );
   const metaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
   const tailBytes = Math.min(512 * 1024, Math.max(16 * 1024, tailFrames * 4096));
-  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  const metaOptions = getModelMetaOptions(buildHailoModelOptions());
 
   try {
     const text = await readTail(metaPath, tailBytes);
-    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap, aiAllowedLabels);
+    const frames = applyLabelMap(
+      parseTailFrames(text, tailFrames),
+      metaOptions.labelMap,
+      metaOptions.allowedLabels,
+    );
     res.json({ ok: true, frames });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, frames: [] });
@@ -699,7 +711,7 @@ app.get('/api/session/:jobId/meta', async (req, res) => {
   const jobId = req.params.jobId;
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
-  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  const metaOptions = getSessionMetaOptions(jobId);
 
   try {
     const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
@@ -721,7 +733,7 @@ app.get('/api/session/:jobId/meta', async (req, res) => {
     } else {
       frames = frames.map(normalizeFrame);
     }
-    frames = applyLabelMap(frames, labelMap, aiAllowedLabels).filter(
+    frames = applyLabelMap(frames, metaOptions.labelMap, metaOptions.allowedLabels).filter(
       (frame) => frame.t !== null || frame.detections.length,
     );
     res.json({ ok: true, jobId, metaPath, frames });
@@ -741,12 +753,16 @@ app.get('/api/session/:jobId/live', async (req, res) => {
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
   const tailBytes = Math.min(512 * 1024, Math.max(16 * 1024, tailFrames * 4096));
-  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  const metaOptions = getSessionMetaOptions(jobId);
 
   try {
     const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
     const text = await readTail(targetPath, tailBytes);
-    const frames = applyLabelMap(parseTailFrames(text, tailFrames), labelMap, aiAllowedLabels);
+    const frames = applyLabelMap(
+      parseTailFrames(text, tailFrames),
+      metaOptions.labelMap,
+      metaOptions.allowedLabels,
+    );
     res.json({ ok: true, jobId, frames });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, frames: [] });
@@ -840,13 +856,15 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
       format: options.format,
       inputPath: path.join(UPLOAD_DIR, filename),
       metaRawPath,
-      model: HAILO_MODEL_NAME,
+      model: options.model,
+      modelOptions: options.modelOptions,
       durationSec: options.durationSec,
     });
+    const metaOptions = getModelMetaOptions(options.modelOptions);
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId: metaBase,
-      labelMap: parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
-      allowedLabels: aiAllowedLabels,
+      labelMap: metaOptions.labelMap,
+      allowedLabels: metaOptions.allowedLabels,
     });
 
     triggerAnalyzeRequest({
@@ -976,6 +994,12 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     return res.status(409).json({ ok: false, error: 'AI stream already active' });
   }
   const streamOptions = parseStreamOptions(req.query || {});
+  let requestedModel;
+  try {
+    requestedModel = normalizeRequestedModel(req.query.model);
+  } catch (err) {
+    return res.status(err.httpStatus || 400).json({ ok: false, error: err.message });
+  }
   const requestedConfigName = typeof req.query.config === 'string' ? req.query.config.trim() : '';
   const requestedConfigPath = requestedConfigName ? resolveAiConfigPath(requestedConfigName) : null;
   if (requestedConfigName && !requestedConfigPath) {
@@ -1003,10 +1027,10 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     width: streamOptions.width,
     height: streamOptions.height,
     fps: streamOptions.fps,
-    model: HAILO_MODEL_NAME,
-    modelOptions: buildHailoModelOptions({
+    model: requestedModel,
+    modelOptions: buildHailoModelOptions(requestedModel, {
       postProcessFunc: HAILO_PREVIEW_POSTPROCESS_FUNC,
-      postProcessConfig: requestedConfigPath || aiPostprocessConfig,
+      ...(requestedConfigPath ? { postProcessConfig: requestedConfigPath } : {}),
     }),
   });
   const previewProc = spawn(SESSION_GST_CMD, previewArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -1185,7 +1209,26 @@ function parseLabelMap(raw) {
   return map;
 }
 
-function buildHailoModelOptions(overrides = {}) {
+function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
+  const model = typeof modelOrOverrides === 'string' ? modelOrOverrides : HAILO_MODEL_NAME;
+  const overrides = typeof modelOrOverrides === 'string' ? maybeOverrides : modelOrOverrides;
+  const requested = String(model || HAILO_MODEL_NAME).trim().toLowerCase();
+
+  if (requested === SERVICE7_MODEL_NAME) {
+    return {
+      model: SERVICE7_MODEL_NAME,
+      inferenceWidth: 960,
+      inferenceHeight: 960,
+      hefPath: SERVICE7_HEF_PATH,
+      postProcessLib: HAILO_POSTPROCESS_LIB,
+      postProcessFunc: 'filter',
+      postProcessConfig: SERVICE7_POSTPROCESS_CONFIG,
+      labelMap: parseLabelMap(SERVICE7_LABEL_MAP),
+      allowedLabels: readAiConfigAllowedLabels(SERVICE7_POSTPROCESS_CONFIG),
+      ...overrides,
+    };
+  }
+
   return {
     model: HAILO_MODEL_NAME,
     inferenceWidth: HAILO_INFERENCE_WIDTH,
@@ -1194,6 +1237,8 @@ function buildHailoModelOptions(overrides = {}) {
     postProcessLib: HAILO_POSTPROCESS_LIB,
     postProcessFunc: HAILO_POSTPROCESS_FUNC,
     postProcessConfig: aiPostprocessConfig,
+    labelMap: aiLabelMap,
+    allowedLabels: aiAllowedLabels,
     ...overrides,
   };
 }
@@ -1206,7 +1251,24 @@ function normalizeRequestedModel(model) {
   if (!HAILO_MODEL_ALIASES.has(requested)) {
     throw httpError(`Invalid model. Use ${HAILO_MODEL_NAME}`, 400);
   }
-  return HAILO_MODEL_NAME;
+  return requested;
+}
+
+function getModelMetaOptions(modelOptions = {}) {
+  const configPath = modelOptions.postProcessConfig || aiPostprocessConfig;
+  return {
+    labelMap:
+      modelOptions.labelMap
+      || readAiConfigLabelMap(configPath)
+      || parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
+    allowedLabels: modelOptions.allowedLabels || readAiConfigAllowedLabels(configPath) || aiAllowedLabels,
+  };
+}
+
+function getSessionMetaOptions(jobId) {
+  const status = jobId ? sessionManager.getStatus(jobId) : null;
+  const modelOptions = status?.modelOptions || buildHailoModelOptions(status?.model);
+  return getModelMetaOptions(modelOptions);
 }
 
 function normalizeAllowedLabels(allowedLabels) {
@@ -1282,6 +1344,24 @@ function readAiConfigAllowedLabels(configPath) {
   }
 }
 
+function readAiConfigLabelMap(configPath) {
+  if (!configPath) return null;
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const labels = Array.isArray(parsed?.labels) ? parsed.labels : null;
+    if (!labels?.length) return null;
+    return labels.reduce((map, label, index) => {
+      const value = String(label || '').trim();
+      if (value) map[index] = value;
+      return map;
+    }, {});
+  } catch (err) {
+    log('Failed to read AI config label map', err.message);
+    return null;
+  }
+}
+
 function getAiConfigStatus() {
   const options = listAiConfigFiles();
   const current = path.basename(aiPostprocessConfig);
@@ -1303,6 +1383,7 @@ function setAiConfigByName(name) {
     throw httpError('Invalid config name', 400);
   }
   aiPostprocessConfig = path.join(AI_CONFIG_DIR, safeName);
+  aiLabelMap = readAiConfigLabelMap(aiPostprocessConfig);
   aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
   if (sessionManager?.defaultModelOptions) {
     sessionManager.defaultModelOptions = buildHailoModelOptions();
@@ -1316,7 +1397,8 @@ function parseSessionOptions(body) {
   const fps = parsePositiveNumber(body.fps, SESSION_DEFAULTS.fps);
   const durationSec = parseNonNegativeNumber(body.durationSec, 0);
   const model = normalizeRequestedModel(body.model);
-  return { width, height, fps, durationSec, model };
+  const modelOptions = buildHailoModelOptions(model);
+  return { width, height, fps, durationSec, model, modelOptions };
 }
 
 function buildJobId() {
@@ -1476,7 +1558,7 @@ async function finalizeAutoRecordMeta(filename) {
   const autoMetaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
-  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  const metaOptions = getModelMetaOptions(buildHailoModelOptions());
 
   await ensureSessionDirs();
   try {
@@ -1488,8 +1570,8 @@ async function finalizeAutoRecordMeta(filename) {
   try {
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId,
-      labelMap,
-      allowedLabels: aiAllowedLabels,
+      labelMap: metaOptions.labelMap,
+      allowedLabels: metaOptions.allowedLabels,
     });
   } catch (err) {
     log('Auto record meta normalize failed', err.message);
@@ -1523,7 +1605,9 @@ function parseCaptureOptions(body) {
   );
 
   const filename = deriveFilename(body.filename, { format, width, height, fps, durationSec });
-  return { format, width, height, fps, durationSec, filename };
+  const model = normalizeRequestedModel(body.model);
+  const modelOptions = buildHailoModelOptions(model);
+  return { format, width, height, fps, durationSec, filename, model, modelOptions };
 }
 
 function deriveFilename(inputName, { format, width, height, fps, durationSec }) {
@@ -1709,12 +1793,12 @@ async function ensureSessionDirs() {
 // 세션 종료 후 메타 정규화 및 분석 트리거
 async function finalizeSessionMeta(session) {
   if (!session || !session.metaRawPath || !session.metaPath) return;
-  const labelMap = parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP);
+  const metaOptions = getModelMetaOptions(session.modelOptions || buildHailoModelOptions(session.model));
   try {
     await normalizeMetaFile(session.metaRawPath, session.metaPath, {
       jobId: session.jobId,
-      labelMap,
-      allowedLabels: aiAllowedLabels,
+      labelMap: metaOptions.labelMap,
+      allowedLabels: metaOptions.allowedLabels,
     });
   } catch (err) {
     log('Meta normalization failed', err.message);
@@ -1728,13 +1812,20 @@ async function finalizeSessionMeta(session) {
 }
 
 // 파일 기반 Hailo 추론 수행
-async function runHailoInferenceOnFile({ format, inputPath, metaRawPath, model, durationSec }) {
+async function runHailoInferenceOnFile({
+  format,
+  inputPath,
+  metaRawPath,
+  model,
+  modelOptions,
+  durationSec,
+}) {
   const gstArgs = buildGstFileArgs({
     format,
     inputPath,
     metaPath: metaRawPath,
     model,
-    modelOptions: buildHailoModelOptions(),
+    modelOptions: modelOptions || buildHailoModelOptions(model),
   });
   const timeoutMs = computeAnalyzeTimeout(format, durationSec);
   logCommand(SESSION_GST_CMD, gstArgs);

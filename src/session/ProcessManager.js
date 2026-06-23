@@ -119,6 +119,7 @@ class ProcessManager {
     const metaPath = path.join(this.metaDir, `${jobId}.meta.json`);
     const metaRawPath = `${metaPath}.raw`;
     const statePath = path.join(this.stateDir, `${jobId}.session.json`);
+    const modelOptions = { ...this.defaultModelOptions, ...(options.modelOptions || {}) };
 
     const session = {
       jobId,
@@ -132,6 +133,8 @@ class ProcessManager {
       metaPath,
       metaRawPath,
       statePath,
+      model: options.model || modelOptions.model || null,
+      modelOptions,
       record: null,
       inference: null,
       pids: {},
@@ -156,7 +159,7 @@ class ProcessManager {
         fps,
         metaPath: metaRawPath,
         model: options.model,
-        modelOptions: { ...this.defaultModelOptions, ...(options.modelOptions || {}) },
+        modelOptions,
       });
       const recordArgs = this.buildRecordArgs
         ? this.buildRecordArgs({
@@ -243,6 +246,8 @@ class ProcessManager {
       stoppedAt: session.stoppedAt,
       errorMessage: session.errorMessage,
       pids: session.pids,
+      model: session.model,
+      modelOptions: session.modelOptions,
     };
   }
 
@@ -438,6 +443,8 @@ class ProcessManager {
       stoppedAt: session.stoppedAt,
       errorMessage: session.errorMessage,
       pids: session.pids,
+      model: session.model,
+      modelOptions: session.modelOptions,
       videoFile: session.videoFile,
       videoPath: session.videoPath,
       videoPartPath: session.videoPartPath,

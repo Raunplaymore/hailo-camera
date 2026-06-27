@@ -895,6 +895,7 @@ app.post('/api/meta/from-file', async (req, res) => {
   const inputPath = typeof body.inputPath === 'string' ? body.inputPath : '';
   const filename = typeof body.filename === 'string' ? body.filename : path.basename(inputPath || '');
   const force = Boolean(body.force);
+  const durationSec = parsePositiveNumber(body.durationSec, undefined);
   const requestedModel = body.model || SERVICE7_MODEL_NAME;
 
   if (!targetJobId || targetJobId.includes('/') || targetJobId.includes('\\')) {
@@ -940,7 +941,7 @@ app.post('/api/meta/from-file', async (req, res) => {
       metaRawPath,
       model,
       modelOptions,
-      durationSec: undefined,
+      durationSec,
     });
     const metaOptions = getModelMetaOptions(modelOptions);
     await normalizeMetaFile(metaRawPath, metaPath, {

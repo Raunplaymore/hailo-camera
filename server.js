@@ -889,6 +889,73 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
   }
 });
 
+app.post('/api/meta/from-file', async (req, res) => {
+  const body = req.body || {};
+  const targetJobId = String(body.jobId || '').trim();
+  const inputPath = typeof body.inputPath === 'string' ? body.inputPath : '';
+  const filename = typeof body.filename === 'string' ? body.filename : path.basename(inputPath || '');
+  const force = Boolean(body.force);
+  const requestedModel = body.model || SERVICE7_MODEL_NAME;
+
+  if (!targetJobId || targetJobId.includes('/') || targetJobId.includes('\\')) {
+    return res.status(400).json({ ok: false, error: 'Invalid jobId' });
+  }
+  if (!inputPath) {
+    return res.status(400).json({ ok: false, error: 'inputPath is required' });
+  }
+
+  const resolvedInput = path.resolve(inputPath);
+  const resolvedUploadDir = path.resolve(UPLOAD_DIR);
+  if (!resolvedInput.startsWith(`${resolvedUploadDir}${path.sep}`)) {
+    return res.status(400).json({ ok: false, error: 'Invalid input path' });
+  }
+
+  const ext = path.extname(resolvedInput).toLowerCase();
+  const format = ext === '.mp4' ? 'mp4' : ext === '.h264' ? 'h264' : ext === '.jpg' || ext === '.jpeg' ? 'jpg' : null;
+  if (!format) {
+    return res.status(400).json({ ok: false, error: 'Unsupported input format for inference' });
+  }
+
+  try {
+    const model = normalizeRequestedModel(requestedModel);
+    const modelOptions = buildHailoModelOptions(model);
+    const metaPath = path.join(SESSION_META_DIR, `${targetJobId}.meta.json`);
+    const metaRawPath = `${metaPath}.raw`;
+
+    if (!force) {
+      try {
+        await fsp.access(metaPath, fs.constants.R_OK);
+        return res.json({ ok: true, jobId: targetJobId, filename, metaPath, cached: true });
+      } catch {
+        // regenerate below
+      }
+    }
+
+    await ensureSessionDirs();
+    await fsp.unlink(metaRawPath).catch(() => {});
+    await fsp.unlink(metaPath).catch(() => {});
+    await runHailoInferenceOnFile({
+      format,
+      inputPath: resolvedInput,
+      metaRawPath,
+      model,
+      modelOptions,
+      durationSec: undefined,
+    });
+    const metaOptions = getModelMetaOptions(modelOptions);
+    await normalizeMetaFile(metaRawPath, metaPath, {
+      jobId: targetJobId,
+      labelMap: metaOptions.labelMap,
+      allowedLabels: metaOptions.allowedLabels,
+    });
+
+    return res.json({ ok: true, jobId: targetJobId, filename, metaPath, cached: false });
+  } catch (err) {
+    const status = err.httpStatus || (err.code === 'TIMEOUT' ? 504 : 500);
+    return res.status(status).json({ ok: false, error: err.message || 'meta generation failed' });
+  }
+});
+
 // MJPEG 프리뷰 스트림
 app.get('/api/camera/stream.mjpeg', async (req, res) => {
   if (STREAM_TOKEN) {

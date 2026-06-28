@@ -863,6 +863,10 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     const metaOptions = getModelMetaOptions(options.modelOptions);
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId: metaBase,
+      fps: options.fps,
+      width: options.width,
+      height: options.height,
+      durationMs: Number(options.durationSec) > 0 ? Math.round(Number(options.durationSec) * 1000) : null,
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
     });
@@ -896,6 +900,10 @@ app.post('/api/meta/from-file', async (req, res) => {
   const filename = typeof body.filename === 'string' ? body.filename : path.basename(inputPath || '');
   const force = Boolean(body.force);
   const durationSec = parsePositiveNumber(body.durationSec, undefined);
+  const width = parsePositiveNumber(body.width, undefined);
+  const height = parsePositiveNumber(body.height, undefined);
+  const fps = parsePositiveNumber(body.fps, undefined);
+  const durationMs = parsePositiveNumber(body.durationMs, undefined);
   const requestedModel = body.model || SERVICE7_MODEL_NAME;
 
   if (!targetJobId || targetJobId.includes('/') || targetJobId.includes('\\')) {
@@ -946,6 +954,10 @@ app.post('/api/meta/from-file', async (req, res) => {
     const metaOptions = getModelMetaOptions(modelOptions);
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId: targetJobId,
+      fps,
+      width,
+      height,
+      durationMs: durationMs || (durationSec ? Math.round(durationSec * 1000) : null),
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
     });
@@ -1638,6 +1650,9 @@ async function finalizeAutoRecordMeta(filename) {
   try {
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId,
+      fps: SESSION_DEFAULTS.fps,
+      width: SESSION_DEFAULTS.width,
+      height: SESSION_DEFAULTS.height,
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
     });
@@ -1865,6 +1880,9 @@ async function finalizeSessionMeta(session) {
   try {
     await normalizeMetaFile(session.metaRawPath, session.metaPath, {
       jobId: session.jobId,
+      fps: session.fps,
+      width: session.width,
+      height: session.height,
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
     });

@@ -1,8 +1,10 @@
+const { pathToFileURL } = require('url');
+
 const DEFAULTS = {
   inferenceWidth: 640,
   inferenceHeight: 640,
   hefPath: '/usr/share/hailo-models/yolov8s.hef',
-  postProcessLib: 'libyolo_hailortpp_post.so',
+  postProcessLib: '/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_hailortpp_post.so',
   postProcessFunc: 'yolov8s',
 };
 
@@ -348,26 +350,10 @@ function buildGstFileArgs(options) {
 function buildFileSourceArgs(format, inputPath) {
   const normalized = (format || '').toLowerCase();
   if (normalized === 'mp4') {
-    return [
-      'filesrc',
-      `location=${inputPath}`,
-      '!',
-      'qtdemux',
-      '!',
-      'h264parse',
-      '!',
-      'avdec_h264',
-    ];
+    return ['uridecodebin', `uri=${pathToFileURL(inputPath).href}`];
   }
   if (normalized === 'h264') {
-    return [
-      'filesrc',
-      `location=${inputPath}`,
-      '!',
-      'h264parse',
-      '!',
-      'avdec_h264',
-    ];
+    return ['uridecodebin', `uri=${pathToFileURL(inputPath).href}`];
   }
   if (normalized === 'jpg' || normalized === 'jpeg') {
     return ['filesrc', `location=${inputPath}`, '!', 'jpegdec'];

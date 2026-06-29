@@ -92,12 +92,18 @@ const HAILO_MODEL_ALIASES = new Set([
 ]);
 const HAILO_INFERENCE_WIDTH = parsePositiveNumber(process.env.HAILO_INFERENCE_WIDTH, 640);
 const HAILO_INFERENCE_HEIGHT = parsePositiveNumber(process.env.HAILO_INFERENCE_HEIGHT, 640);
-const HAILO_POSTPROCESS_LIB = process.env.HAILO_POSTPROCESS_LIB || 'libyolo_hailortpp_post.so';
+const DEFAULT_POSTPROCESS_LIB = '/usr/lib/aarch64-linux-gnu/hailo/tappas/post_processes/libyolo_hailortpp_post.so';
+const HAILO_POSTPROCESS_LIB =
+  process.env.HAILO_POSTPROCESS_LIB && path.isAbsolute(process.env.HAILO_POSTPROCESS_LIB)
+    ? process.env.HAILO_POSTPROCESS_LIB
+    : DEFAULT_POSTPROCESS_LIB;
 const HAILO_POSTPROCESS_FUNC = process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s';
 const HAILO_PREVIEW_POSTPROCESS_FUNC = process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter';
 const AI_CONFIG_DIR = path.join(__dirname, 'config');
 const SERVICE7_HEF_PATH = process.env.SERVICE7_HEF_PATH
-  || '/usr/share/hailo-models/yolov8n_service7_960.hef';
+  || '/usr/share/hailo-models/yolov8n_service7_640.hef';
+const SERVICE7_INFERENCE_WIDTH = parsePositiveNumber(process.env.SERVICE7_INFERENCE_WIDTH, 640);
+const SERVICE7_INFERENCE_HEIGHT = parsePositiveNumber(process.env.SERVICE7_INFERENCE_HEIGHT, 640);
 const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
 const SERVICE7_LABEL_MAP = '0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle';
@@ -1297,8 +1303,8 @@ function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
   if (requested === SERVICE7_MODEL_NAME) {
     return {
       model: SERVICE7_MODEL_NAME,
-      inferenceWidth: 960,
-      inferenceHeight: 960,
+      inferenceWidth: SERVICE7_INFERENCE_WIDTH,
+      inferenceHeight: SERVICE7_INFERENCE_HEIGHT,
       hefPath: SERVICE7_HEF_PATH,
       postProcessLib: HAILO_POSTPROCESS_LIB,
       postProcessFunc: 'filter',

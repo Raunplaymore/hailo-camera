@@ -106,6 +106,8 @@ const SERVICE7_INFERENCE_WIDTH = parsePositiveNumber(process.env.SERVICE7_INFERE
 const SERVICE7_INFERENCE_HEIGHT = parsePositiveNumber(process.env.SERVICE7_INFERENCE_HEIGHT, 640);
 const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
+const SERVICE7_DEBUG_POSTPROCESS_CONFIG = process.env.SERVICE7_DEBUG_POSTPROCESS_CONFIG
+  || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms_debug.json');
 const SERVICE7_LABEL_MAP = '0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle';
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
@@ -911,6 +913,10 @@ app.post('/api/meta/from-file', async (req, res) => {
   const fps = parsePositiveNumber(body.fps, undefined);
   const durationMs = parsePositiveNumber(body.durationMs, undefined);
   const requestedModel = body.model || SERVICE7_MODEL_NAME;
+  const debugDetections =
+    body.debugDetections === true ||
+    body.debug === true ||
+    String(body.debugDetections || body.debug || '').toLowerCase() === 'true';
 
   if (!targetJobId || targetJobId.includes('/') || targetJobId.includes('\\')) {
     return res.status(400).json({ ok: false, error: 'Invalid jobId' });
@@ -933,11 +939,17 @@ app.post('/api/meta/from-file', async (req, res) => {
 
   try {
     const model = normalizeRequestedModel(requestedModel);
-    const modelOptions = buildHailoModelOptions(model);
+    const modelOptions = buildHailoModelOptions(
+      model,
+      debugDetections && model === SERVICE7_MODEL_NAME
+        ? { postProcessConfig: SERVICE7_DEBUG_POSTPROCESS_CONFIG }
+        : {},
+    );
     const metaPath = path.join(SESSION_META_DIR, `${targetJobId}.meta.json`);
+    const debugMetaPath = path.join(SESSION_META_DIR, `${targetJobId}.debug.meta.json`);
     const metaRawPath = `${metaPath}.raw`;
 
-    if (!force) {
+    if (!force && !debugDetections) {
       try {
         await fsp.access(metaPath, fs.constants.R_OK);
         return res.json({ ok: true, jobId: targetJobId, filename, metaPath, cached: true });
@@ -949,6 +961,7 @@ app.post('/api/meta/from-file', async (req, res) => {
     await ensureSessionDirs();
     await fsp.unlink(metaRawPath).catch(() => {});
     await fsp.unlink(metaPath).catch(() => {});
+    await fsp.unlink(debugMetaPath).catch(() => {});
     await runHailoInferenceOnFile({
       format,
       inputPath: resolvedInput,
@@ -967,8 +980,26 @@ app.post('/api/meta/from-file', async (req, res) => {
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
     });
+    if (debugDetections) {
+      await normalizeMetaFile(metaRawPath, debugMetaPath, {
+        jobId: targetJobId,
+        fps,
+        width,
+        height,
+        durationMs: durationMs || (durationSec ? Math.round(durationSec * 1000) : null),
+        labelMap: metaOptions.labelMap,
+        allowedLabels: null,
+      });
+    }
 
-    return res.json({ ok: true, jobId: targetJobId, filename, metaPath, cached: false });
+    return res.json({
+      ok: true,
+      jobId: targetJobId,
+      filename,
+      metaPath,
+      debugMetaPath: debugDetections ? debugMetaPath : null,
+      cached: false,
+    });
   } catch (err) {
     const status = err.httpStatus || (err.code === 'TIMEOUT' ? 504 : 500);
     return res.status(status).json({ ok: false, error: err.message || 'meta generation failed' });

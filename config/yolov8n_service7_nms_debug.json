@@ -1,0 +1,23 @@
+{
+  "detection_threshold": 0.03,
+  "max_boxes": 200,
+  "output_layer": "yolov8n_service7/yolov8_nms_postprocess",
+  "allowed_labels": [
+    "person",
+    "player_ready",
+    "player_not_ready",
+    "golf_ball",
+    "club_head",
+    "club",
+    "club_handle"
+  ],
+  "labels": [
+    "person",
+    "player_ready",
+    "player_not_ready",
+    "golf_ball",
+    "club_head",
+    "club",
+    "club_handle"
+  ]
+}

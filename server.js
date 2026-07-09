@@ -1025,6 +1025,7 @@ app.get('/api/camera/stream.mjpeg', async (req, res) => {
     await sharedPipeline.retain('preview', sourceConfig);
   } catch (err) {
     const status = err.status || 503;
+    lastError = err.message;
     return res.status(status).json({ ok: false, error: err.message });
   }
 
@@ -1132,6 +1133,7 @@ app.get('/api/camera/stream.ai.mjpeg', async (req, res) => {
     await sharedPipeline.retain('ai-preview', sourceConfig);
   } catch (err) {
     const status = err.status || 503;
+    lastError = err.message;
     return res.status(status).json({ ok: false, error: err.message });
   }
 

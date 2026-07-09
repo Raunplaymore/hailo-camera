@@ -112,6 +112,7 @@ class SharedPipeline {
     const child = spawn(this.gstCmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     this.pipelineProc = child;
     let stderr = '';
+    let spawnError = null;
     const stderrLimit = 2000;
 
     child.stderr.on('data', (data) => {
@@ -124,6 +125,7 @@ class SharedPipeline {
     });
 
     child.on('error', (err) => {
+      spawnError = err;
       this.lastError = err.message;
       this.logger('shared pipeline spawn error', err.message);
     });
@@ -140,7 +142,17 @@ class SharedPipeline {
       }
     });
 
-    await waitForHealthy(child);
+    try {
+      await waitForHealthy(child, {
+        getError: () => spawnError,
+        getStderr: () => stderr,
+      });
+    } catch (err) {
+      this.pipelineProc = null;
+      this.pipelineConfig = null;
+      this.lastError = err.message;
+      throw err;
+    }
   }
 
   stopPipeline(reason = 'idle') {
@@ -220,18 +232,36 @@ function buildSharedPipelineArgs({ width, height, fps, socketPaths, shmSize }) {
   ];
 }
 
-async function waitForHealthy(child, timeoutMs = 500) {
+async function waitForHealthy(child, options = {}) {
+  const timeoutMs = typeof options === 'number' ? options : options.timeoutMs || 500;
+  const getError = typeof options.getError === 'function' ? options.getError : () => null;
+  const getStderr = typeof options.getStderr === 'function' ? options.getStderr : () => '';
+
+  const buildStartError = () => {
+    const spawnError = getError();
+    const stderr = String(getStderr() || '').trim();
+    if (spawnError) {
+      const err = new Error(`Failed to start camera pipeline: ${spawnError.message}`);
+      err.status = spawnError.code === 'ENOENT' ? 503 : 500;
+      return err;
+    }
+    if (stderr) {
+      const err = new Error(`Failed to start camera pipeline: ${stderr}`);
+      err.status = 503;
+      return err;
+    }
+    const err = new Error('Camera device busy');
+    err.status = 409;
+    return err;
+  };
+
   if (!child) return;
   if (child.exitCode !== null) {
-    const err = new Error('Pipeline exited before start');
-    err.status = 409;
-    throw err;
+    throw buildStartError();
   }
   await new Promise((resolve) => setTimeout(resolve, timeoutMs));
   if (child.exitCode !== null) {
-    const err = new Error('Camera device busy');
-    err.status = 409;
-    throw err;
+    throw buildStartError();
   }
 }
 

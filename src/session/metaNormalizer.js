@@ -26,7 +26,8 @@ function normalizeFrameTimes(frames, fps, durationMs) {
   const safeFps = toPositiveNumber(fps);
   const safeDurationMs = toPositiveNumber(durationMs);
   const frameTimes = frames.map((frame) => {
-    const frameIndex = Number(frame?.frame);
+    const rawFrameIndex = frame?.frame;
+    const frameIndex = rawFrameIndex === null || rawFrameIndex === undefined ? null : Number(rawFrameIndex);
     return Number.isFinite(frameIndex) && frameIndex >= 0 && safeFps
       ? (frameIndex * 1000) / safeFps
       : null;
@@ -42,6 +43,23 @@ function normalizeFrameTimes(frames, fps, durationMs) {
         t: frameTimes[index],
       }));
     }
+  }
+  const expectedFrameCount = safeFps && safeDurationMs ? (safeDurationMs * safeFps) / 1000 : null;
+  const frameCountMatchesVideo = expectedFrameCount
+    && Math.abs((frames.length - 1) - expectedFrameCount) <= Math.max(2, expectedFrameCount * 0.08);
+  const rawTimes = frames
+    .map((frame) => Number(frame?.t))
+    .filter(Number.isFinite);
+  const rawSpanMs = rawTimes.length >= 2 ? Math.max(...rawTimes) - Math.min(...rawTimes) : 0;
+  const compressedInferenceClock = safeDurationMs && rawSpanMs > 0 && rawSpanMs < safeDurationMs * 0.75;
+  if (!validFrameTimes.length && frameCountMatchesVideo && compressedInferenceClock) {
+    return frames.map((frame, index) => ({
+      ...frame,
+      frame: index,
+      inferredFrameIndex: true,
+      sourceTimestampMs: frame.t === null ? null : Number(frame.t),
+      t: (index * 1000) / safeFps,
+    }));
   }
   let baseTime = null;
   for (const frame of frames) {

@@ -8,7 +8,7 @@ async function normalizeMetaFile(rawPath, outputPath, options = {}) {
   const mappedFrames = applyLabelMap(frames, options.labelMap || {}, options.allowedLabels).filter(
     (frame) => frame.t !== null || frame.detections.length,
   );
-  const normalizedFrames = normalizeFrameTimes(mappedFrames);
+  const normalizedFrames = normalizeFrameTimes(mappedFrames, options.fps, options.durationMs);
   const inferredDurationMs = inferDurationMs(normalizedFrames, options.fps);
   const payload = {
     jobId: options.jobId || null,
@@ -22,7 +22,27 @@ async function normalizeMetaFile(rawPath, outputPath, options = {}) {
   return { framesCount: normalizedFrames.length, durationMs: payload.durationMs || 0 };
 }
 
-function normalizeFrameTimes(frames) {
+function normalizeFrameTimes(frames, fps, durationMs) {
+  const safeFps = toPositiveNumber(fps);
+  const safeDurationMs = toPositiveNumber(durationMs);
+  const frameTimes = frames.map((frame) => {
+    const frameIndex = Number(frame?.frame);
+    return Number.isFinite(frameIndex) && frameIndex >= 0 && safeFps
+      ? (frameIndex * 1000) / safeFps
+      : null;
+  });
+  const validFrameTimes = frameTimes.filter(Number.isFinite);
+  if (validFrameTimes.length >= 2) {
+    const maxFrameTime = Math.max(...validFrameTimes);
+    const frameClockFitsVideo = !safeDurationMs || maxFrameTime <= safeDurationMs * 1.12 + 120;
+    if (frameClockFitsVideo && maxFrameTime > Math.min(...validFrameTimes)) {
+      return frames.map((frame, index) => ({
+        ...frame,
+        sourceTimestampMs: frame.t === null ? null : Number(frame.t),
+        t: frameTimes[index],
+      }));
+    }
+  }
   let baseTime = null;
   for (const frame of frames) {
     if (frame && frame.t !== null && Number.isFinite(Number(frame.t))) {
@@ -90,4 +110,5 @@ function toPositiveNumber(value) {
 
 module.exports = {
   normalizeMetaFile,
+  normalizeFrameTimes,
 };

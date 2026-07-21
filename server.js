@@ -101,9 +101,9 @@ const HAILO_POSTPROCESS_FUNC = process.env.HAILO_POSTPROCESS_FUNC || 'yolov8s';
 const HAILO_PREVIEW_POSTPROCESS_FUNC = process.env.HAILO_PREVIEW_POSTPROCESS_FUNC || 'filter';
 const AI_CONFIG_DIR = path.join(__dirname, 'config');
 const SERVICE7_HEF_PATH = process.env.SERVICE7_HEF_PATH
-  || '/usr/share/hailo-models/yolov8n_service7_640.hef';
-const SERVICE7_INFERENCE_WIDTH = parsePositiveNumber(process.env.SERVICE7_INFERENCE_WIDTH, 640);
-const SERVICE7_INFERENCE_HEIGHT = parsePositiveNumber(process.env.SERVICE7_INFERENCE_HEIGHT, 640);
+  || '/usr/share/hailo-models/yolov8n_service7_960_v2.hef';
+const SERVICE7_INFERENCE_WIDTH = parsePositiveNumber(process.env.SERVICE7_INFERENCE_WIDTH, 960);
+const SERVICE7_INFERENCE_HEIGHT = parsePositiveNumber(process.env.SERVICE7_INFERENCE_HEIGHT, 960);
 const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
 const SERVICE7_DEBUG_POSTPROCESS_CONFIG = process.env.SERVICE7_DEBUG_POSTPROCESS_CONFIG

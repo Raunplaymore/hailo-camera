@@ -259,7 +259,7 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 sudo cp yolov8n_service7_960.hef /usr/share/hailo-models/
 ```
 
-서버는 `model: "yolov8n_service7"` 요청을 받으면 자동으로 `/usr/share/hailo-models/yolov8n_service7_960.hef`, 960×960 입력, `filter`, `config/yolov8n_service7_nms.json`, 7클래스 라벨맵을 사용합니다. `filter` 함수는 config의 `output_layer` 값을 사용하므로, DFC compile 시 `net_name`을 바꾸면 config의 `output_layer`도 같은 이름으로 맞춰야 합니다.
+서버는 `model: "yolov8n_service7"` 요청을 받으면 자동으로 `/usr/share/hailo-models/yolov8n_service7_960.hef`, 960×960 입력, `filter`, `config/yolov8n_service7_nms.json`을 사용합니다. HEF는 7개 클래스를 내보내지만 TAPPAS `filter`는 NMS class ID를 1부터 라벨 배열에 매핑하므로, config의 첫 항목은 `__background__` 더미이고 이후에 7개 실제 라벨을 둡니다. `filter` 함수는 config의 `output_layer` 값을 사용하므로, DFC compile 시 `net_name`을 바꾸면 config의 `output_layer`도 같은 이름으로 맞춰야 합니다.
 
 3클래스 MVP 모델을 fallback으로 쓸 때만 `yolov8n_golf3_960.hef`, `config/yolov8n_golf3_nms.json`, `SESSION_LABEL_MAP=0:person,1:golf_ball,2:club_head` 조합으로 바꿉니다.
 

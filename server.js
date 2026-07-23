@@ -108,7 +108,8 @@ const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
 const SERVICE7_DEBUG_POSTPROCESS_CONFIG = process.env.SERVICE7_DEBUG_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms_debug.json');
-const SERVICE7_LABEL_MAP = '0:person,1:player_ready,2:player_not_ready,3:golf_ball,4:club_head,5:club,6:club_handle';
+// TAPPAS Hailo NMS labels are 1-indexed; index 0 is the placeholder background label.
+const SERVICE7_LABEL_MAP = '1:person,2:player_ready,3:player_not_ready,4:golf_ball,5:club_head,6:club,7:club_handle';
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
 let aiPostprocessConfig = DEFAULT_AI_CONFIG;

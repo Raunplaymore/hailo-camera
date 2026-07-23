@@ -12,6 +12,7 @@
     "club_handle"
   ],
   "labels": [
+    "__background__",
     "person",
     "player_ready",
     "player_not_ready",

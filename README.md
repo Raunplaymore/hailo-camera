@@ -80,6 +80,10 @@ service7의 파일 분석(`POST /api/meta/from-file`, capture-and-analyze)은 �
 `(114,114,114)` letterbox를 적용합니다. Hailo 메타 bbox는 다시 회전된 원본 화면 좌표로 역변환됩니다.
 이는 정사각형으로 단순 stretch하는 것과 다르며, 학습·ONNX 검증 전처리와 일치합니다.
 
+기본 Service7 운영 모델은 `yolov8n_service7_960_v7.hef`이며, 960×960 입력과 HEF 내부 NMS
+`score=0.01`, `IoU=0.70`을 사용합니다. `SERVICE7_POST_NMS_THRESHOLDS`는 메타 단계에서만
+적용되는 class별 균형 정책이므로 HEF의 약한 ball/head 후보 자체를 버리지는 않습니다.
+
 > Auto record 데모 기능은 부팅 시 `ts-node/register` 로 TypeScript 파일을 직접 로드합니다. `ts-node` 사용이 어려우면 `npm run build:auto`로 미리 컴파일하거나 해당 기능을 비활성화하세요.
 
 ---

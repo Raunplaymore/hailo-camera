@@ -63,6 +63,11 @@ const SESSION_META_DIR = process.env.META_DIR ? path.resolve(process.env.META_DI
 const SESSION_STATE_DIR = '/tmp';
 const SESSION_LOCK_FILE = '/tmp/session.lock';
 const SESSION_MAX_TAIL_FRAMES = 200;
+const TIMELAPSE_FFMPEG_CMD = process.env.TIMELAPSE_FFMPEG_CMD || 'ffmpeg';
+const TIMELAPSE_DEFAULT_SAMPLE_SEC = parsePositiveNumber(process.env.TIMELAPSE_DEFAULT_SAMPLE_SEC, 10);
+const TIMELAPSE_DEFAULT_OUTPUT_FPS = parsePositiveNumber(process.env.TIMELAPSE_DEFAULT_OUTPUT_FPS, 10);
+const TIMELAPSE_TIMEOUT_MS = parsePositiveNumber(process.env.TIMELAPSE_TIMEOUT_MS, 30 * 60 * 1000);
+const timelapseJobs = new Map();
 const CALIBRATION_DIR = path.join(__dirname, 'calibration');
 const SHARED_PIPELINE_SOCKET_PREVIEW = '/tmp/hailo_camera_preview.shm';
 const SHARED_PIPELINE_SOCKET_RECORD = '/tmp/hailo_camera_record.shm';
@@ -666,12 +671,27 @@ app.post('/api/session/:jobId/stop', async (req, res) => {
   const jobId = req.params.jobId;
   try {
     const session = await sessionManager.stopSession(jobId, 'user');
+    await waitForFinalizedSessionVideo(session);
     res.json({
       ok: true,
       jobId,
       videoUrl: `/uploads/${session.videoFile}`,
       metaPath: session.metaPath,
     });
+  } catch (err) {
+    const status = err.status || err.httpStatus || 500;
+    res.status(status).json({ ok: false, error: err.message });
+  }
+});
+
+// 종료된 원본 영상에서 작업 요약용 타임랩스 MP4를 생성한다.
+app.post('/api/session/:jobId/timelapse', async (req, res) => {
+  const jobId = req.params.jobId;
+  let options;
+  try {
+    options = parseTimelapseOptions(req.body || {});
+    const result = await createSessionTimelapse(jobId, options);
+    res.json({ ok: true, jobId, ...result });
   } catch (err) {
     const status = err.status || err.httpStatus || 500;
     res.status(status).json({ ok: false, error: err.message });
@@ -1521,6 +1541,21 @@ function parseSessionOptions(body) {
   return { width, height, fps, durationSec, model, modelOptions };
 }
 
+function parseTimelapseOptions(body) {
+  return {
+    sampleEverySec: clamp(
+      parsePositiveNumber(body.sampleEverySec, TIMELAPSE_DEFAULT_SAMPLE_SEC),
+      1,
+      3600,
+    ),
+    outputFps: clamp(
+      parsePositiveNumber(body.outputFps, TIMELAPSE_DEFAULT_OUTPUT_FPS),
+      1,
+      60,
+    ),
+  };
+}
+
 function buildJobId() {
   const now = new Date();
   const pad = (n, len = 2) => String(n).padStart(len, '0');
@@ -1816,6 +1851,81 @@ async function deleteSessionArtifacts(jobId) {
     fsp.unlink(statePath).catch(() => undefined),
   ]);
   return deleted;
+}
+
+async function createSessionTimelapse(jobId, { sampleEverySec, outputFps }) {
+  if (!/^session_[A-Za-z0-9_-]+$/.test(jobId)) {
+    throw httpError('Invalid session id', 400);
+  }
+  if (sessionManager.isRunning() && sessionManager.getStatus(jobId)?.status === 'running') {
+    throw httpError('Stop the recording before creating a timelapse', 409);
+  }
+  if (timelapseJobs.has(jobId)) {
+    throw httpError('Timelapse generation already in progress', 409);
+  }
+
+  const statePath = path.join(SESSION_STATE_DIR, `${jobId}.session.json`);
+  let videoFile = `${jobId}.mp4`;
+  try {
+    const state = JSON.parse(await fsp.readFile(statePath, 'utf8'));
+    if (state?.videoFile) videoFile = path.basename(state.videoFile);
+  } catch (_) {
+    throw httpError('Session not found', 404);
+  }
+  if (!videoFile.endsWith('.mp4')) {
+    throw httpError('Session video is not an MP4 file', 400);
+  }
+
+  const inputPath = path.join(UPLOAD_DIR, videoFile);
+  const timelapseFile = `${videoFile.slice(0, -4)}_timelapse.mp4`;
+  const outputPath = path.join(UPLOAD_DIR, timelapseFile);
+  const outputPartPath = `${outputPath}.part`;
+  await fsp.access(inputPath).catch(() => {
+    throw httpError('Session video is not ready', 409);
+  });
+  await ensureUploadsDir();
+
+  const task = (async () => {
+    await fsp.unlink(outputPartPath).catch(() => {});
+    const args = [
+      '-y',
+      '-i', inputPath,
+      '-vf', `fps=1/${sampleEverySec}`,
+      '-r', String(outputFps),
+      '-an',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '24',
+      '-movflags', '+faststart',
+      outputPartPath,
+    ];
+    logCommand(TIMELAPSE_FFMPEG_CMD, args);
+    const { stdout, stderr } = await runCommand(TIMELAPSE_FFMPEG_CMD, args, TIMELAPSE_TIMEOUT_MS);
+    logOutputs(stdout, stderr);
+    await finalizeTempFile(outputPartPath, outputPath);
+    return { timelapseFile, timelapseUrl: `/uploads/${timelapseFile}` };
+  })();
+  timelapseJobs.set(jobId, task);
+  try {
+    return await task;
+  } finally {
+    timelapseJobs.delete(jobId);
+    await fsp.unlink(outputPartPath).catch(() => {});
+  }
+}
+
+async function waitForFinalizedSessionVideo(session, timeoutMs = 30_000) {
+  if (!session?.videoPath) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fsp.access(session.videoPath);
+      return;
+    } catch (_) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw httpError('Video is still finalizing. Try again shortly.', 409);
 }
 
 function getAutoRecordStatus() {

@@ -8,6 +8,23 @@ const DEFAULTS = {
   postProcessFunc: 'yolov8s',
 };
 
+function buildHailonetArgs(modelOptions) {
+  const scoreThreshold = boundedThreshold(modelOptions.nmsScoreThreshold);
+  const iouThreshold = boundedThreshold(modelOptions.nmsIouThreshold);
+  return [
+    'hailonet',
+    `hef-path=${modelOptions.hefPath}`,
+    ...(scoreThreshold === null ? [] : [`nms-score-threshold=${scoreThreshold}`]),
+    ...(iouThreshold === null ? [] : [`nms-iou-threshold=${iouThreshold}`]),
+  ];
+}
+
+function boundedThreshold(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const threshold = Number(value);
+  return Number.isFinite(threshold) && threshold >= 0 && threshold <= 1 ? threshold : null;
+}
+
 function resolveModelOptions(model, overrides = {}) {
   const resolvedModel = model || overrides.model || 'yolov8s';
   return { ...DEFAULTS, ...overrides, model: resolvedModel };
@@ -30,8 +47,7 @@ function buildGstLaunchArgs(options) {
     '!',
     `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
     '!',
-    'hailonet',
-    `hef-path=${modelOptions.hefPath}`,
+    ...buildHailonetArgs(modelOptions),
     '!',
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
@@ -66,8 +82,7 @@ function buildGstShmInferenceArgs(options) {
     '!',
     `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
     '!',
-    'hailonet',
-    `hef-path=${modelOptions.hefPath}`,
+    ...buildHailonetArgs(modelOptions),
     '!',
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
@@ -139,8 +154,7 @@ function buildGstShmAiPreviewArgs(options) {
     '!',
     `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
     '!',
-    'hailonet',
-    `hef-path=${modelOptions.hefPath}`,
+    ...buildHailonetArgs(modelOptions),
     '!',
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,
@@ -331,8 +345,7 @@ function buildGstFileArgs(options) {
     '!',
     `video/x-raw,width=${modelOptions.inferenceWidth},height=${modelOptions.inferenceHeight},format=RGB`,
     '!',
-    'hailonet',
-    `hef-path=${modelOptions.hefPath}`,
+    ...buildHailonetArgs(modelOptions),
     '!',
     'hailofilter',
     `so-path=${modelOptions.postProcessLib}`,

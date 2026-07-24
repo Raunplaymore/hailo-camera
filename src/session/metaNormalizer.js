@@ -5,7 +5,13 @@ const { parseFramesFromText } = require('./tailParser');
 async function normalizeMetaFile(rawPath, outputPath, options = {}) {
   const raw = await fsp.readFile(rawPath, 'utf8').catch(() => null);
   const frames = raw ? parseFramesFromText(raw) : [];
-  const mappedFrames = applyLabelMap(frames, options.labelMap || {}, options.allowedLabels).filter(
+  const transformedFrames = applyCoordinateTransform(frames, options.coordinateTransform);
+  const mappedFrames = applyLabelMap(
+    transformedFrames,
+    options.labelMap || {},
+    options.allowedLabels,
+    options.minConfidenceByLabel,
+  ).filter(
     (frame) => frame.t !== null || frame.detections.length,
   );
   const normalizedFrames = normalizeFrameTimes(mappedFrames, options.fps, options.durationMs);
@@ -13,8 +19,8 @@ async function normalizeMetaFile(rawPath, outputPath, options = {}) {
   const payload = {
     jobId: options.jobId || null,
     fps: toPositiveNumber(options.fps),
-    width: toPositiveNumber(options.width),
-    height: toPositiveNumber(options.height),
+    width: toPositiveNumber(options.coordinateTransform?.sourceWidth) || toPositiveNumber(options.width),
+    height: toPositiveNumber(options.coordinateTransform?.sourceHeight) || toPositiveNumber(options.height),
     durationMs: toPositiveNumber(options.durationMs) || inferredDurationMs,
     frames: normalizedFrames,
   };
@@ -84,7 +90,7 @@ function inferDurationMs(frames, fps) {
   return Math.round(((frames.length - 1) * 1000) / safeFps);
 }
 
-function applyLabelMap(frames, labelMap, allowedLabels) {
+function applyLabelMap(frames, labelMap, allowedLabels, minConfidenceByLabel) {
   const mapped = (!labelMap || !Object.keys(labelMap).length)
     ? frames
     : frames.map((frame) => ({
@@ -98,15 +104,78 @@ function applyLabelMap(frames, labelMap, allowedLabels) {
         }),
       }));
   const allowedSet = normalizeAllowedLabels(allowedLabels);
-  if (!allowedSet) return mapped;
+  const thresholdMap = normalizeConfidenceThresholds(minConfidenceByLabel);
+  if (!allowedSet && !thresholdMap) return mapped;
   return mapped.map((frame) => ({
     ...frame,
     detections: (frame.detections || []).filter((det) => {
       if (!det || !det.label) return false;
       const label = String(det.label).trim().toLowerCase();
-      return label ? allowedSet.has(label) : false;
+      if (!label || (allowedSet && !allowedSet.has(label))) return false;
+      const threshold = thresholdMap?.[label];
+      return threshold === undefined || Number(det.conf) >= threshold;
     }),
   }));
+}
+
+function applyCoordinateTransform(frames, transform) {
+  const normalized = normalizeCoordinateTransform(transform);
+  if (!normalized) return frames;
+  return frames.map((frame) => ({
+    ...frame,
+    detections: (frame.detections || [])
+      .map((detection) => transformDetection(detection, normalized))
+      .filter(Boolean),
+  }));
+}
+
+function transformDetection(detection, transform) {
+  if (!Array.isArray(detection?.bbox) || detection.bbox.length < 4) return detection;
+  const [xmin, ymin, width, height] = detection.bbox.map(Number);
+  if (![xmin, ymin, width, height].every(Number.isFinite)) return null;
+  const left = ((xmin * transform.targetWidth) - transform.padX) / transform.scale;
+  const top = ((ymin * transform.targetHeight) - transform.padY) / transform.scale;
+  const right = (((xmin + width) * transform.targetWidth) - transform.padX) / transform.scale;
+  const bottom = (((ymin + height) * transform.targetHeight) - transform.padY) / transform.scale;
+  const clippedLeft = clamp(left, 0, transform.sourceWidth);
+  const clippedTop = clamp(top, 0, transform.sourceHeight);
+  const clippedRight = clamp(right, 0, transform.sourceWidth);
+  const clippedBottom = clamp(bottom, 0, transform.sourceHeight);
+  if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return null;
+  return {
+    ...detection,
+    bbox: [
+      clippedLeft / transform.sourceWidth,
+      clippedTop / transform.sourceHeight,
+      (clippedRight - clippedLeft) / transform.sourceWidth,
+      (clippedBottom - clippedTop) / transform.sourceHeight,
+    ],
+  };
+}
+
+function normalizeCoordinateTransform(transform) {
+  if (!transform || typeof transform !== 'object') return null;
+  const values = ['sourceWidth', 'sourceHeight', 'targetWidth', 'targetHeight', 'scale']
+    .map((key) => Number(transform[key]));
+  if (!values.every((value) => Number.isFinite(value) && value > 0)) return null;
+  const [sourceWidth, sourceHeight, targetWidth, targetHeight, scale] = values;
+  const padX = Number(transform.padX);
+  const padY = Number(transform.padY);
+  if (!Number.isFinite(padX) || !Number.isFinite(padY)) return null;
+  return { sourceWidth, sourceHeight, targetWidth, targetHeight, scale, padX, padY };
+}
+
+function normalizeConfidenceThresholds(thresholds) {
+  if (!thresholds || typeof thresholds !== 'object' || Array.isArray(thresholds)) return null;
+  const normalized = {};
+  Object.entries(thresholds).forEach(([label, value]) => {
+    const key = String(label).trim().toLowerCase();
+    const threshold = Number(value);
+    if (key && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1) {
+      normalized[key] = threshold;
+    }
+  });
+  return Object.keys(normalized).length ? normalized : null;
 }
 
 function normalizeAllowedLabels(allowedLabels) {
@@ -121,6 +190,10 @@ function normalizeAllowedLabels(allowedLabels) {
   return set.size ? set : null;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function toPositiveNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : null;
@@ -129,4 +202,6 @@ function toPositiveNumber(value) {
 module.exports = {
   normalizeMetaFile,
   normalizeFrameTimes,
+  applyCoordinateTransform,
+  applyLabelMap,
 };

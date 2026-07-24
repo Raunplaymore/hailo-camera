@@ -113,6 +113,13 @@ const SERVICE7_POSTPROCESS_CONFIG = process.env.SERVICE7_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms.json');
 const SERVICE7_DEBUG_POSTPROCESS_CONFIG = process.env.SERVICE7_DEBUG_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8n_service7_nms_debug.json');
+const SERVICE7_FILE_NORMALIZE = String(process.env.SERVICE7_FILE_NORMALIZE || 'true').toLowerCase() !== 'false';
+const SERVICE7_FFMPEG_CMD = process.env.SERVICE7_FFMPEG_CMD || 'ffmpeg';
+const SERVICE7_FFPROBE_CMD = process.env.SERVICE7_FFPROBE_CMD || 'ffprobe';
+const SERVICE7_NORMALIZE_TIMEOUT_MS = parsePositiveNumber(process.env.SERVICE7_NORMALIZE_TIMEOUT_MS, 120_000);
+const SERVICE7_NMS_SCORE_THRESHOLD = parseUnitInterval(process.env.SERVICE7_NMS_SCORE_THRESHOLD);
+const SERVICE7_NMS_IOU_THRESHOLD = parseUnitInterval(process.env.SERVICE7_NMS_IOU_THRESHOLD);
+const SERVICE7_POST_NMS_THRESHOLDS = parseConfidenceThresholds(process.env.SERVICE7_POST_NMS_THRESHOLDS);
 // TAPPAS Hailo NMS labels are 1-indexed; index 0 is the placeholder background label.
 const SERVICE7_LABEL_MAP = '1:person,2:player_ready,3:player_not_ready,4:golf_ball,5:club_head,6:club,7:club_handle';
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
@@ -881,7 +888,7 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
     const metaRawPath = `${metaPath}.raw`;
 
     await ensureSessionDirs();
-    await runHailoInferenceOnFile({
+    const inference = await runHailoInferenceOnFile({
       format: options.format,
       inputPath: path.join(UPLOAD_DIR, filename),
       metaRawPath,
@@ -898,6 +905,8 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
       durationMs: Number(options.durationSec) > 0 ? Math.round(Number(options.durationSec) * 1000) : null,
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
+      minConfidenceByLabel: metaOptions.minConfidenceByLabel,
+      coordinateTransform: inference.coordinateTransform,
     });
 
     triggerAnalyzeRequest({
@@ -983,7 +992,7 @@ app.post('/api/meta/from-file', async (req, res) => {
     await fsp.unlink(metaRawPath).catch(() => {});
     await fsp.unlink(metaPath).catch(() => {});
     await fsp.unlink(debugMetaPath).catch(() => {});
-    await runHailoInferenceOnFile({
+    const inference = await runHailoInferenceOnFile({
       format,
       inputPath: resolvedInput,
       metaRawPath,
@@ -1000,6 +1009,8 @@ app.post('/api/meta/from-file', async (req, res) => {
       durationMs: durationMs || (durationSec ? Math.round(durationSec * 1000) : null),
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
+      minConfidenceByLabel: metaOptions.minConfidenceByLabel,
+      coordinateTransform: inference.coordinateTransform,
     });
     if (debugDetections) {
       await normalizeMetaFile(metaRawPath, debugMetaPath, {
@@ -1010,6 +1021,7 @@ app.post('/api/meta/from-file', async (req, res) => {
         durationMs: durationMs || (durationSec ? Math.round(durationSec * 1000) : null),
         labelMap: metaOptions.labelMap,
         allowedLabels: null,
+        coordinateTransform: inference.coordinateTransform,
       });
     }
 
@@ -1349,6 +1361,33 @@ function parseLabelMap(raw) {
   return map;
 }
 
+function parseUnitInterval(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : null;
+}
+
+function parseConfidenceThresholds(value) {
+  if (!value) return null;
+  let raw = value;
+  if (typeof value === 'string') {
+    try {
+      raw = JSON.parse(value);
+    } catch (_) {
+      log('Ignoring invalid SERVICE7_POST_NMS_THRESHOLDS JSON');
+      return null;
+    }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const thresholds = {};
+  Object.entries(raw).forEach(([label, threshold]) => {
+    const key = String(label).trim().toLowerCase();
+    const score = parseUnitInterval(threshold);
+    if (key && score !== null) thresholds[key] = score;
+  });
+  return Object.keys(thresholds).length ? thresholds : null;
+}
+
 function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
   const model = typeof modelOrOverrides === 'string' ? modelOrOverrides : HAILO_MODEL_NAME;
   const overrides = typeof modelOrOverrides === 'string' ? maybeOverrides : modelOrOverrides;
@@ -1365,6 +1404,14 @@ function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
       postProcessConfig: SERVICE7_POSTPROCESS_CONFIG,
       labelMap: parseLabelMap(SERVICE7_LABEL_MAP),
       allowedLabels: readAiConfigAllowedLabels(SERVICE7_POSTPROCESS_CONFIG),
+      fileNormalize: SERVICE7_FILE_NORMALIZE,
+      minConfidenceByLabel: SERVICE7_POST_NMS_THRESHOLDS,
+      ...(SERVICE7_NMS_SCORE_THRESHOLD === null
+        ? {}
+        : { nmsScoreThreshold: SERVICE7_NMS_SCORE_THRESHOLD }),
+      ...(SERVICE7_NMS_IOU_THRESHOLD === null
+        ? {}
+        : { nmsIouThreshold: SERVICE7_NMS_IOU_THRESHOLD }),
       ...overrides,
     };
   }
@@ -1402,6 +1449,7 @@ function getModelMetaOptions(modelOptions = {}) {
       || readAiConfigLabelMap(configPath)
       || parseLabelMap(process.env.SESSION_LABEL_MAP || process.env.HAILO_LABEL_MAP),
     allowedLabels: modelOptions.allowedLabels || readAiConfigAllowedLabels(configPath) || aiAllowedLabels,
+    minConfidenceByLabel: modelOptions.minConfidenceByLabel || null,
   };
 }
 
@@ -2035,6 +2083,7 @@ async function finalizeSessionMeta(session) {
       height: session.height,
       labelMap: metaOptions.labelMap,
       allowedLabels: metaOptions.allowedLabels,
+      minConfidenceByLabel: metaOptions.minConfidenceByLabel,
     });
   } catch (err) {
     log('Meta normalization failed', err.message);
@@ -2056,17 +2105,127 @@ async function runHailoInferenceOnFile({
   modelOptions,
   durationSec,
 }) {
-  const gstArgs = buildGstFileArgs({
-    format,
+  const resolvedModelOptions = modelOptions || buildHailoModelOptions(model);
+  let normalized = null;
+  let inferenceInputPath = inputPath;
+  let inferenceFormat = format;
+  try {
+    if (resolvedModelOptions.model === SERVICE7_MODEL_NAME && resolvedModelOptions.fileNormalize !== false) {
+      normalized = await normalizeService7FileInput({
+        inputPath,
+        targetWidth: resolvedModelOptions.inferenceWidth,
+        targetHeight: resolvedModelOptions.inferenceHeight,
+        timeoutMs: Math.max(SERVICE7_NORMALIZE_TIMEOUT_MS, computeAnalyzeTimeout(format, durationSec)),
+      });
+      inferenceInputPath = normalized.path;
+      inferenceFormat = 'mp4'; // uridecodebin accepts the temporary Matroska/FFV1 file.
+    }
+    const gstArgs = buildGstFileArgs({
+      format: inferenceFormat,
+      inputPath: inferenceInputPath,
+      metaPath: metaRawPath,
+      model,
+      modelOptions: resolvedModelOptions,
+    });
+    const timeoutMs = computeAnalyzeTimeout(inferenceFormat, durationSec);
+    logCommand(SESSION_GST_CMD, gstArgs);
+    const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
+    logOutputs(stdout, stderr);
+    return { coordinateTransform: normalized?.coordinateTransform || null };
+  } finally {
+    if (normalized?.path) await fsp.unlink(normalized.path).catch(() => {});
+  }
+}
+
+async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight, timeoutMs }) {
+  const source = await probeVideoGeometry(inputPath, timeoutMs);
+  const rotationFilters = ffmpegRotationFilters(source.rotation);
+  const sourceWidth = rotationFilters.length ? source.height : source.width;
+  const sourceHeight = rotationFilters.length ? source.width : source.height;
+  const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const scaledWidth = Math.max(1, Math.round(sourceWidth * scale));
+  const scaledHeight = Math.max(1, Math.round(sourceHeight * scale));
+  const padX = Math.floor((targetWidth - scaledWidth) / 2);
+  const padY = Math.floor((targetHeight - scaledHeight) / 2);
+  const normalizedPath = path.join(
+    SESSION_META_DIR,
+    `.hailo-service7-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.mkv`,
+  );
+  const filters = [
+    ...rotationFilters,
+    `scale=${scaledWidth}:${scaledHeight}:flags=bilinear`,
+    `pad=${targetWidth}:${targetHeight}:${padX}:${padY}:color=0x727272`,
+    'format=rgb24',
+  ];
+  const args = [
+    '-hide_banner',
+    '-nostdin',
+    '-y',
+    '-noautorotate',
+    '-i', inputPath,
+    '-map', '0:v:0',
+    '-an',
+    '-vf', filters.join(','),
+    '-c:v', 'ffv1',
+    '-pix_fmt', 'rgb24',
+    normalizedPath,
+  ];
+  logCommand(SERVICE7_FFMPEG_CMD, args);
+  try {
+    const { stdout, stderr } = await runCommand(SERVICE7_FFMPEG_CMD, args, timeoutMs);
+    logOutputs(stdout, stderr);
+    return {
+      path: normalizedPath,
+      coordinateTransform: {
+        sourceWidth,
+        sourceHeight,
+        targetWidth,
+        targetHeight,
+        scale,
+        padX,
+        padY,
+      },
+    };
+  } catch (err) {
+    await fsp.unlink(normalizedPath).catch(() => {});
+    throw err;
+  }
+}
+
+async function probeVideoGeometry(inputPath, timeoutMs) {
+  const args = [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height:stream_tags=rotate:stream_side_data=rotation',
+    '-of', 'json',
     inputPath,
-    metaPath: metaRawPath,
-    model,
-    modelOptions: modelOptions || buildHailoModelOptions(model),
-  });
-  const timeoutMs = computeAnalyzeTimeout(format, durationSec);
-  logCommand(SESSION_GST_CMD, gstArgs);
-  const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
+  ];
+  const { stdout, stderr } = await runCommand(SERVICE7_FFPROBE_CMD, args, timeoutMs);
   logOutputs(stdout, stderr);
+  let payload;
+  try {
+    payload = JSON.parse(stdout);
+  } catch (_) {
+    throw httpError('Could not parse source video geometry', 500);
+  }
+  const stream = Array.isArray(payload?.streams) ? payload.streams[0] : null;
+  const width = Number(stream?.width);
+  const height = Number(stream?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw httpError('Source video has no readable dimensions', 500);
+  }
+  const rotation = Number(stream?.side_data_list?.find((item) => item?.rotation !== undefined)?.rotation
+    ?? stream?.tags?.rotate
+    ?? 0);
+  return { width, height, rotation: Number.isFinite(rotation) ? rotation : 0 };
+}
+
+function ffmpegRotationFilters(rotation) {
+  const normalized = ((Math.round(rotation) % 360) + 360) % 360;
+  if (normalized === 270) return ['transpose=1']; // ffprobe -90: display is clockwise.
+  if (normalized === 90) return ['transpose=2'];
+  if (normalized === 180) return ['hflip', 'vflip'];
+  return [];
 }
 
 // 분석 타임아웃 계산

@@ -57,6 +57,9 @@ pwdx $(pgrep -f "node.*server.js" | head -1)
 | `HAILO_POSTPROCESS_FUNC` | 기본 세션/파일 추론용 postprocess 함수명 (default `yolov8s`) |
 | `HAILO_PREVIEW_POSTPROCESS_FUNC` | AI 프리뷰용 postprocess 함수명 (default `filter`) |
 | `AI_POSTPROCESS_CONFIG` | Hailo postprocess config 경로 (default `config/yolov8s_nms_golf.json`) |
+| `SERVICE7_FILE_NORMALIZE` | service7 파일 분석에서 회전 감지·YOLO 114-gray letterbox 적용 여부 (default `true`) |
+| `SERVICE7_NMS_SCORE_THRESHOLD` / `SERVICE7_NMS_IOU_THRESHOLD` | 구형 HEF에만 적용할 hailonet runtime NMS override. v7처럼 HEF에 이미 설정됐으면 비워 둔다. |
+| `SERVICE7_POST_NMS_THRESHOLDS` | 선택적 class별 후처리 confidence JSON. 예: `{"golf_ball":0.03,"club_head":0.03}` |
 | `AUTO_ADDRESS_STILL_MS` | 자동 촬영: 어드레스 안정 지속 시간(ms, default `2000`) |
 | `AUTO_ADDRESS_MAX_CENTER_PX` | 자동 촬영: 중심 이동 허용(px, default `14`) |
 | `AUTO_ADDRESS_MAX_AREA_RATIO` | 자동 촬영: bbox 면적 변화 허용 비율(default `0.12`) |
@@ -71,6 +74,11 @@ mp4 캡처는 항상 `filename.mp4.part`로 쓰고 완료 후 `.mp4`로 rename�
 `ANALYZE_URL`은 캡처+메타 생성 또는 세션 종료 후 **코칭 분석**을 트리거하는 용도로 사용됩니다.
 카메라 서버의 `analyze`는 **Hailo 메타 생성**을 의미하며, 스윙 이벤트/코칭 해석은 `ANALYZE_URL` 대상입니다.
 분석 트리거는 **mp4 finalize(.mp4.part → .mp4 rename) 이후**에만 호출됩니다.
+
+service7의 파일 분석(`POST /api/meta/from-file`, capture-and-analyze)은 입력 영상의 display rotation을
+`ffprobe`로 읽고, `ffmpeg -noautorotate`로 화면 방향을 바로잡은 뒤 모델 입력 크기에 맞춰 RGB
+`(114,114,114)` letterbox를 적용합니다. Hailo 메타 bbox는 다시 회전된 원본 화면 좌표로 역변환됩니다.
+이는 정사각형으로 단순 stretch하는 것과 다르며, 학습·ONNX 검증 전처리와 일치합니다.
 
 > Auto record 데모 기능은 부팅 시 `ts-node/register` 로 TypeScript 파일을 직접 로드합니다. `ts-node` 사용이 어려우면 `npm run build:auto`로 미리 컴파일하거나 해당 기능을 비활성화하세요.
 

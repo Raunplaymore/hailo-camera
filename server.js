@@ -2046,11 +2046,11 @@ function getAutoRecordStatus() {
       ...status,
       jobId: filename ? deriveJobIdFromFilename(filename) : null,
       lastRecordingMetaPath:
-        lastAutoAnalyzeFilename === filename ? lastAutoAnalyzeMetaPath : null,
+        filename && lastAutoAnalyzeFilename === filename ? lastAutoAnalyzeMetaPath : null,
       videoReady: videoSize > 0,
       videoSize,
       finalizing,
-      analysisRequested: lastAutoAnalyzeFilename === filename,
+      analysisRequested: Boolean(filename) && lastAutoAnalyzeFilename === filename,
     };
   }
   return {

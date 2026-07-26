@@ -51,6 +51,7 @@ export class RecorderController implements RecorderAdapter {
     const stderrLabel = mode === 'shm' ? '[gst-launch]' : '[libcamera-vid]';
     child.stderr?.on('data', (data) => this.log(stderrLabel, data.toString().trim()));
     child.on('close', (code, signal) => {
+      const wasStopping = this.stopping;
       this.log('Recorder closed', code, signal || '');
       this.process = null;
       this.stopping = false;
@@ -63,12 +64,18 @@ export class RecorderController implements RecorderAdapter {
           this.log('onRecordingStop failed', err)
         );
       }
-      if (code !== 0 && !this.stopping) {
-        this.log('Recorder exited unexpectedly', code);
+      if (!wasStopping) {
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
+        const error = createError(`Recorder exited unexpectedly (${detail})`);
+        this.log(error.message);
+        this.notifyRecordingError(error);
       }
     });
     child.on('error', (err) => {
       this.log('Recorder process error', err.message);
+      if (!this.stopping) {
+        this.notifyRecordingError(err);
+      }
     });
     this.process = child;
     this.currentFile = { filename, finalPath, tempPath };
@@ -86,8 +93,9 @@ export class RecorderController implements RecorderAdapter {
     const child = this.process;
     child.kill('SIGINT');
     setTimeout(() => {
-      if (child.killed) return;
-      child.kill('SIGTERM');
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGTERM');
+      }
     }, 1500);
     await new Promise<void>((resolve, reject) => {
       const onClose = (code: number | null) => {
@@ -109,6 +117,10 @@ export class RecorderController implements RecorderAdapter {
     if (!this.currentFile) return;
     const { tempPath, finalPath } = this.currentFile;
     try {
+      const stat = await fsp.stat(tempPath);
+      if (!stat.isFile() || stat.size <= 0) {
+        throw createError('Recorder produced an empty video file');
+      }
       await fsp.rename(tempPath, finalPath);
     } catch (err) {
       this.log('Failed to finalize recording', err);
@@ -221,5 +233,12 @@ export class RecorderController implements RecorderAdapter {
     if (this.options.logger) {
       this.options.logger('[Recorder]', ...args);
     }
+  }
+
+  private notifyRecordingError(error: Error) {
+    if (!this.options.onRecordingError) return;
+    Promise.resolve(this.options.onRecordingError(error)).catch((err) =>
+      this.log('onRecordingError failed', err)
+    );
   }
 }

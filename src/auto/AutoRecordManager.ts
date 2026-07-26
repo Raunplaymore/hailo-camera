@@ -79,7 +79,16 @@ export class AutoRecordManager {
     this.log('AutoRecord stop requested', reason);
     this.clearTimers();
     if (this.state === 'recording' || this.state === 'finishLocked' || this.state === 'stopping') {
-      await this.safeStopRecorder().catch((err) => this.fail(err as Error));
+      try {
+        await this.safeStopRecorder();
+      } catch (err) {
+        await this.detector.stop().catch((stopErr) =>
+          this.log('Detector stop failed', stopErr.message)
+        );
+        this.detectorPaused = false;
+        this.fail(err as Error);
+        return this.getStatus();
+      }
     }
     await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
     this.detectorPaused = false;
@@ -96,6 +105,16 @@ export class AutoRecordManager {
       lastRecordingFilename: this.lastRecordingFilename || null,
       lastError: this.lastError || null,
     };
+  }
+
+  handleRecorderError(error: Error) {
+    if (this.state === 'idle' || this.state === 'failed') return;
+    this.fail(error);
+    this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
+  }
+
+  handleFinalizationError(error: Error) {
+    this.fail(error);
   }
 
   private enterAddressLocked() {
@@ -130,7 +149,16 @@ export class AutoRecordManager {
   private async handleStopSequence() {
     if (this.state !== 'finishLocked' && this.state !== 'recording') return;
     this.transitionTo('stopping');
-    await this.safeStopRecorder().catch((err) => this.fail(err as Error));
+    try {
+      await this.safeStopRecorder();
+    } catch (err) {
+      await this.detector.stop().catch((stopErr) =>
+        this.log('Detector stop failed', stopErr.message)
+      );
+      this.detectorPaused = false;
+      this.fail(err as Error);
+      return;
+    }
     await this.detector.stop().catch((err) => this.log('Detector stop failed', err.message));
     this.resetSession();
   }

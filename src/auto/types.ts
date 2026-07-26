@@ -73,6 +73,7 @@ export interface RecorderControllerOptions {
   encoder?: string;
   onRecordingStart?: () => void | Promise<void>;
   onRecordingStop?: () => void | Promise<void>;
+  onRecordingError?: (error: Error) => void | Promise<void>;
   videoCommands: string[];
   acquireLock: (expectedMs: number) => Promise<boolean>;
   releaseLock: () => Promise<void>;

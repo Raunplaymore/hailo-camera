@@ -152,6 +152,8 @@ let autoRecordManager = null;
 let autoRecordInitError = null;
 let lastAutoAnalyzeFilename = null;
 let lastAutoAnalyzeMetaPath = null;
+let lastAutoRecordOptions = {};
+let autoRecordFinalizeTask = null;
 let autoRecordPipelineHeld = false;
 let autoRecordRecordingHeld = false;
 
@@ -385,6 +387,7 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         encoder: SESSION_RECORD_ENCODER,
         onRecordingStart: retainAutoRecordRecording,
         onRecordingStop: releaseAutoRecordRecording,
+        onRecordingError: (error) => autoRecordManager?.handleRecorderError(error),
         videoCommands: VIDEO_COMMANDS,
         libavCodec: process.env.LIBAV_VIDEO_CODEC || 'libx264',
         acquireLock: tryAcquireLock,
@@ -415,6 +418,12 @@ if (tsNodeRegistered && AutoRecordManager && RecorderController) {
         if (state === 'failed' || state === 'idle') {
           releaseAutoRecordPipeline();
           releaseAutoRecordRecording();
+        }
+        if (state === 'idle' && prevState === 'stopping') {
+          const filename = autoRecordManager?.getStatus().lastRecordingFilename;
+          if (filename) {
+            scheduleAutoRecordFinalize(filename);
+          }
         }
       },
       logger: (...args) => log(...args),
@@ -511,12 +520,7 @@ app.get('/api/camera/status', async (_req, res) => {
 // 자동 녹화 상태 조회
 app.get('/api/camera/auto-record/status', async (_req, res) => {
   try {
-    const status = getAutoRecordStatus();
-    let lastRecordingMetaPath = status.lastRecordingMetaPath || null;
-    if (status.state === 'idle' && status.lastRecordingFilename) {
-      lastRecordingMetaPath = await finalizeAutoRecordMeta(status.lastRecordingFilename);
-    }
-    res.json({ ok: true, status: { ...status, lastRecordingMetaPath } });
+    res.json({ ok: true, status: getAutoRecordStatus() });
   } catch (err) {
     log('Auto record status error', err.message || err);
     res.status(200).json({
@@ -556,6 +560,9 @@ app.post('/api/camera/auto-record/start', async (req, res) => {
     return res.status(409).json({ ok: false, error: 'Camera busy' });
   }
   try {
+    lastAutoRecordOptions = {
+      club: typeof req.body?.club === 'string' ? req.body.club.trim() : null,
+    };
     const status = await manager.start();
     res.json({ ok: true, status });
   } catch (err) {
@@ -574,11 +581,11 @@ app.post('/api/camera/auto-record/stop', async (_req, res) => {
   if (!manager) return;
   try {
     const status = await manager.stop('user');
-    let lastRecordingMetaPath = status.lastRecordingMetaPath || null;
     if (status.lastRecordingFilename) {
-      lastRecordingMetaPath = await finalizeAutoRecordMeta(status.lastRecordingFilename);
+      await scheduleAutoRecordFinalize(status.lastRecordingFilename);
     }
-    res.json({ ok: true, status: { ...status, lastRecordingMetaPath } });
+    const finalizedStatus = getAutoRecordStatus();
+    res.json({ ok: finalizedStatus.state !== 'failed', status: finalizedStatus });
   } catch (err) {
     const statusCode = err.status === 409 ? 409 : 200;
     res.status(statusCode).json({
@@ -1648,14 +1655,27 @@ async function listSessions({ limit, offset }) {
       const parsed = JSON.parse(raw);
       const jobId = parsed.jobId || deriveJobIdFromStateFile(entry.name);
       const videoFile = parsed.videoFile || null;
+      const videoPath = videoFile ? path.join(UPLOAD_DIR, videoFile) : null;
+      let videoReady = false;
+      if (videoPath) {
+        try {
+          const stat = await fsp.stat(videoPath);
+          videoReady = stat.isFile() && stat.size > 0;
+        } catch (_) {
+          videoReady = false;
+        }
+      }
       items.push({
         jobId,
-        status: parsed.status || 'unknown',
+        status: parsed.status === 'recorded' && !videoReady ? 'failed' : parsed.status || 'unknown',
         startedAt: parsed.startedAt || null,
         stoppedAt: parsed.stoppedAt || null,
-        errorMessage: parsed.errorMessage || null,
+        errorMessage:
+          parsed.errorMessage ||
+          (parsed.status === 'recorded' && !videoReady ? 'Recorded video is missing or empty' : null),
         videoFile,
-        videoUrl: videoFile ? `/uploads/${videoFile}` : null,
+        videoUrl: videoReady ? `/uploads/${videoFile}` : null,
+        videoReady,
         metaPath: parsed.metaPath || null,
       });
     } catch (err) {
@@ -1758,6 +1778,11 @@ async function finalizeAutoRecordMeta(filename) {
 
   const jobId = deriveJobIdFromFilename(filename);
   if (!jobId) return null;
+  const videoPath = path.join(UPLOAD_DIR, filename);
+  const videoStat = await fsp.stat(videoPath).catch(() => null);
+  if (!videoStat?.isFile() || videoStat.size <= 0) {
+    throw new Error(`Recorded video is missing or empty: ${filename}`);
+  }
   const autoMetaPath = path.join(SESSION_META_DIR, 'auto_record.meta.json');
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
@@ -1790,10 +1815,33 @@ async function finalizeAutoRecordMeta(filename) {
     return null;
   }
   await ensureAutoRecordSessionState(filename, metaPath, metaRawPath);
+  await triggerAnalyzeRequest({
+    jobId,
+    filename,
+    metaPath,
+    requireVideo: true,
+    club: lastAutoRecordOptions.club,
+  });
   lastAutoAnalyzeFilename = filename;
   lastAutoAnalyzeMetaPath = metaPath;
-  triggerAnalyzeRequest({ jobId, filename, metaPath }).catch(() => {});
   return metaPath;
+}
+
+function scheduleAutoRecordFinalize(filename) {
+  if (
+    autoRecordFinalizeTask?.filename === filename &&
+    autoRecordFinalizeTask?.promise
+  ) {
+    return autoRecordFinalizeTask.promise;
+  }
+  const promise = finalizeAutoRecordMeta(filename).catch((err) => {
+    log('Auto record finalization failed', err.message || err);
+    autoRecordManager?.handleFinalizationError(err);
+    throw err;
+  });
+  autoRecordFinalizeTask = { filename, promise };
+  promise.catch(() => {});
+  return promise;
 }
 
 function parseCaptureOptions(body) {
@@ -1978,7 +2026,32 @@ async function waitForFinalizedSessionVideo(session, timeoutMs = 30_000) {
 
 function getAutoRecordStatus() {
   if (autoRecordManager) {
-    return autoRecordManager.getStatus();
+    const status = autoRecordManager.getStatus();
+    const filename = status.lastRecordingFilename || status.recordingFilename;
+    let videoSize = 0;
+    if (filename) {
+      try {
+        const stat = fs.statSync(path.join(UPLOAD_DIR, filename));
+        videoSize = stat.isFile() ? stat.size : 0;
+      } catch (_) {
+        videoSize = 0;
+      }
+    }
+    const finalizing =
+      Boolean(filename) &&
+      autoRecordFinalizeTask?.filename === filename &&
+      lastAutoAnalyzeFilename !== filename &&
+      status.state !== 'failed';
+    return {
+      ...status,
+      jobId: filename ? deriveJobIdFromFilename(filename) : null,
+      lastRecordingMetaPath:
+        lastAutoAnalyzeFilename === filename ? lastAutoAnalyzeMetaPath : null,
+      videoReady: videoSize > 0,
+      videoSize,
+      finalizing,
+      analysisRequested: lastAutoAnalyzeFilename === filename,
+    };
   }
   return {
     enabled: false,
@@ -2241,12 +2314,18 @@ function deriveMetaBase(filename) {
 }
 
 // 외부 분석 서비스 호출
-async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
-  if (!ANALYZE_URL) return;
+async function triggerAnalyzeRequest({ jobId, filename, metaPath, force, requireVideo, club }) {
+  if (!ANALYZE_URL) {
+    if (requireVideo) {
+      throw new Error('Analyze service is not configured');
+    }
+    return;
+  }
   const payload = {
     jobId,
     filename,
     metaPath,
+    requireVideo: Boolean(requireVideo),
     force: Boolean(force),
     mode: 'coach_from_meta',
     source: {
@@ -2254,7 +2333,10 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
       filename,
       videoPath: filename ? path.join(UPLOAD_DIR, filename) : null,
     },
-    options: { force: Boolean(force) },
+    options: {
+      force: Boolean(force),
+      ...(club ? { club } : {}),
+    },
   };
   try {
     const analyzeResp = await fetch(ANALYZE_URL, {
@@ -2274,6 +2356,7 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force }) {
     }
   } catch (err) {
     log('Analyze trigger failed', err.message);
+    throw err;
   }
 }
 

@@ -136,6 +136,16 @@ let aiPostprocessConfig = DEFAULT_AI_CONFIG;
 let aiLabelMap = readAiConfigLabelMap(aiPostprocessConfig);
 let aiAllowedLabels = readAiConfigAllowedLabels(aiPostprocessConfig);
 const SESSION_RECORD_ENCODER = detectRecordEncoder();
+// A Hailo-8 is shared by Service7 and the DTL sidecar. Serializing only the
+// file-analysis requests prevents two gst-launch hailonet processes from
+// competing for the same accelerator while keeping camera preview untouched.
+let fileInferenceTail = Promise.resolve();
+
+function queueFileInference(task) {
+  const run = fileInferenceTail.then(task, task);
+  fileInferenceTail = run.catch(() => {});
+  return run;
+}
 const STILL_COMMANDS = buildCommandList(process.env.CAMERA_STILL_CMDS || process.env.STILL_CMD, [
   'rpicam-still',
   'libcamera-still',
@@ -1007,14 +1017,14 @@ app.post('/api/meta/from-file', async (req, res) => {
     await fsp.unlink(metaRawPath).catch(() => {});
     await fsp.unlink(metaPath).catch(() => {});
     await fsp.unlink(debugMetaPath).catch(() => {});
-    const inference = await runHailoInferenceOnFile({
+    const inference = await queueFileInference(() => runHailoInferenceOnFile({
       format,
       inputPath: resolvedInput,
       metaRawPath,
       model,
       modelOptions,
       durationSec,
-    });
+    }));
     const metaOptions = getModelMetaOptions(modelOptions);
     await normalizeMetaFile(metaRawPath, metaPath, {
       jobId: targetJobId,

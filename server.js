@@ -86,10 +86,13 @@ const HAILO_MODEL_NAME = String(process.env.HAILO_MODEL_NAME || process.env.HAIL
   .trim()
   .toLowerCase();
 const SERVICE7_MODEL_NAME = 'yolov8n_service7';
+// This is a file-analysis sidecar candidate.  It never replaces Service7.
+const DTL_CLUB_POINTS_V2_MODEL_NAME = 'dtl_club_points_v2';
 const HAILO_MODEL_ALIASES = new Set([
   HAILO_MODEL_NAME,
   'yolov8s',
   SERVICE7_MODEL_NAME,
+  DTL_CLUB_POINTS_V2_MODEL_NAME,
   ...String(process.env.HAILO_MODEL_ALIASES || '')
     .split(',')
     .map((name) => name.trim().toLowerCase())
@@ -122,6 +125,11 @@ const SERVICE7_NMS_IOU_THRESHOLD = parseUnitInterval(process.env.SERVICE7_NMS_IO
 const SERVICE7_POST_NMS_THRESHOLDS = parseConfidenceThresholds(process.env.SERVICE7_POST_NMS_THRESHOLDS);
 // TAPPAS Hailo NMS labels are 1-indexed; index 0 is the placeholder background label.
 const SERVICE7_LABEL_MAP = '1:person,2:player_ready,3:player_not_ready,4:golf_ball,5:club_head,6:club,7:club_handle';
+const DTL_CLUB_POINTS_V2_HEF_PATH = process.env.DTL_CLUB_POINTS_V2_HEF_PATH
+  || '/home/ray/data/labs/dtl-club-points-v2-73-r1/yolov8n_dtl_club_points_v2_73_r1_640.hef';
+const DTL_CLUB_POINTS_V2_POSTPROCESS_CONFIG = process.env.DTL_CLUB_POINTS_V2_POSTPROCESS_CONFIG
+  || path.join(AI_CONFIG_DIR, 'dtl_club_points_v2_nms.json');
+const DTL_CLUB_POINTS_V2_LABEL_MAP = '1:club_head,2:club_handle';
 const DEFAULT_AI_CONFIG = process.env.AI_POSTPROCESS_CONFIG
   || path.join(AI_CONFIG_DIR, 'yolov8s_nms_golf.json');
 let aiPostprocessConfig = DEFAULT_AI_CONFIG;
@@ -1423,6 +1431,23 @@ function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
     };
   }
 
+  if (requested === DTL_CLUB_POINTS_V2_MODEL_NAME) {
+    return {
+      model: DTL_CLUB_POINTS_V2_MODEL_NAME,
+      inferenceWidth: 640,
+      inferenceHeight: 640,
+      hefPath: DTL_CLUB_POINTS_V2_HEF_PATH,
+      postProcessLib: HAILO_POSTPROCESS_LIB,
+      postProcessFunc: 'filter',
+      postProcessConfig: DTL_CLUB_POINTS_V2_POSTPROCESS_CONFIG,
+      labelMap: parseLabelMap(DTL_CLUB_POINTS_V2_LABEL_MAP),
+      allowedLabels: readAiConfigAllowedLabels(DTL_CLUB_POINTS_V2_POSTPROCESS_CONFIG),
+      // Reuse the proven Service7 letterbox path so source coordinates are restored.
+      fileNormalize: true,
+      ...overrides,
+    };
+  }
+
   return {
     model: HAILO_MODEL_NAME,
     inferenceWidth: HAILO_INFERENCE_WIDTH,
@@ -2183,7 +2208,7 @@ async function runHailoInferenceOnFile({
   let inferenceInputPath = inputPath;
   let inferenceFormat = format;
   try {
-    if (resolvedModelOptions.model === SERVICE7_MODEL_NAME && resolvedModelOptions.fileNormalize !== false) {
+    if (resolvedModelOptions.fileNormalize !== false) {
       normalized = await normalizeService7FileInput({
         inputPath,
         targetWidth: resolvedModelOptions.inferenceWidth,

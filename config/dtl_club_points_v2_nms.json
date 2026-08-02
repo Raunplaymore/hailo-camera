@@ -1,0 +1,14 @@
+{
+  "detection_threshold": 0.1,
+  "max_boxes": 40,
+  "output_layer": "yolov8n_dtl_club_points/yolov8_nms_postprocess",
+  "labels": [
+    "__background__",
+    "club_head",
+    "club_handle"
+  ],
+  "allowed_labels": [
+    "club_head",
+    "club_handle"
+  ]
+}

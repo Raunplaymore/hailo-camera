@@ -85,6 +85,9 @@ const HAILO_HEF_PATH = process.env.HAILO_HEF_PATH || '/usr/share/hailo-models/yo
 const HAILO_MODEL_NAME = String(process.env.HAILO_MODEL_NAME || process.env.HAILO_MODEL || 'yolov8s')
   .trim()
   .toLowerCase();
+// Watchcat must not inherit the global golf postprocess configuration.
+const WATCHCAT_CAT_MODEL_NAME = 'watchcat-cat';
+const WATCHCAT_CAT_POSTPROCESS_CONFIG = path.join(__dirname, 'config/yolov8s_nms.json');
 const SERVICE7_MODEL_NAME = 'yolov8n_service7';
 // This is a file-analysis sidecar candidate.  It never replaces Service7.
 const DTL_CLUB_POINTS_V2_MODEL_NAME = 'dtl_club_points_v2';
@@ -92,6 +95,7 @@ const HAILO_MODEL_ALIASES = new Set([
   HAILO_MODEL_NAME,
   'yolov8s',
   SERVICE7_MODEL_NAME,
+  WATCHCAT_CAT_MODEL_NAME,
   DTL_CLUB_POINTS_V2_MODEL_NAME,
   ...String(process.env.HAILO_MODEL_ALIASES || '')
     .split(',')
@@ -772,7 +776,7 @@ app.get('/api/session/:jobId/meta', async (req, res) => {
   const jobId = req.params.jobId;
   const metaPath = path.join(SESSION_META_DIR, `${jobId}.meta.json`);
   const metaRawPath = `${metaPath}.raw`;
-  const metaOptions = getSessionMetaOptions(jobId);
+  const metaOptions = getSessionMetaOptions(jobId, req.query.model);
 
   try {
     const targetPath = fs.existsSync(metaPath) ? metaPath : metaRawPath;
@@ -1418,6 +1422,21 @@ function buildHailoModelOptions(modelOrOverrides = {}, maybeOverrides = {}) {
   const overrides = typeof modelOrOverrides === 'string' ? maybeOverrides : modelOrOverrides;
   const requested = String(model || HAILO_MODEL_NAME).trim().toLowerCase();
 
+  if (requested === WATCHCAT_CAT_MODEL_NAME) {
+    return {
+      model: WATCHCAT_CAT_MODEL_NAME,
+      inferenceWidth: HAILO_INFERENCE_WIDTH,
+      inferenceHeight: HAILO_INFERENCE_HEIGHT,
+      hefPath: HAILO_HEF_PATH,
+      postProcessLib: HAILO_POSTPROCESS_LIB,
+      postProcessFunc: HAILO_POSTPROCESS_FUNC,
+      postProcessConfig: WATCHCAT_CAT_POSTPROCESS_CONFIG,
+      labelMap: readAiConfigLabelMap(WATCHCAT_CAT_POSTPROCESS_CONFIG),
+      allowedLabels: readAiConfigAllowedLabels(WATCHCAT_CAT_POSTPROCESS_CONFIG),
+      ...overrides,
+    };
+  }
+
   if (requested === SERVICE7_MODEL_NAME) {
     return {
       model: SERVICE7_MODEL_NAME,
@@ -1495,9 +1514,10 @@ function getModelMetaOptions(modelOptions = {}) {
   };
 }
 
-function getSessionMetaOptions(jobId) {
+function getSessionMetaOptions(jobId, requestedModel) {
   const status = jobId ? sessionManager.getStatus(jobId) : null;
-  const modelOptions = status?.modelOptions || buildHailoModelOptions(status?.model);
+  const model = requestedModel ? normalizeRequestedModel(requestedModel) : status?.model;
+  const modelOptions = status?.modelOptions || buildHailoModelOptions(model);
   return getModelMetaOptions(modelOptions);
 }
 

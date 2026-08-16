@@ -200,6 +200,19 @@ service7의 파일 분석(`POST /api/meta/from-file`, capture-and-analyze)은 �
 - mp4는 `.part`로 기록 후 종료 시 `.mp4`로 rename 됩니다.
 - 분석 트리거는 파일 확정 이후에만 호출됩니다.
 
+`POST /api/session/:jobId/timelapse`
+
+```json
+{
+  "sampleEverySec": 10,
+  "outputFps": 10
+}
+```
+
+- 종료된 원본 MP4에서 일정 간격의 프레임을 추출해 `<jobId>_timelapse.mp4`를 생성합니다.
+- 원본 녹화는 유지되므로, 세부 작업은 원본으로 확인하고 전체 과정은 타임랩스로 빠르게 볼 수 있습니다.
+- 기본값은 10초당 1프레임, 결과 영상 10 FPS입니다. `TIMELAPSE_TIMEOUT_MS`로 긴 영상의 변환 제한 시간을 조정할 수 있습니다.
+
 `GET /api/session/list?limit=50&offset=0`
 
 - 최근 세션 목록을 반환합니다.

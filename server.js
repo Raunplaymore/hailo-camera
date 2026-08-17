@@ -2244,6 +2244,7 @@ async function runHailoInferenceOnFile({
         targetWidth: resolvedModelOptions.inferenceWidth,
         targetHeight: resolvedModelOptions.inferenceHeight,
         timeoutMs: Math.max(SERVICE7_NORMALIZE_TIMEOUT_MS, computeAnalyzeTimeout(format, durationSec)),
+        stillImage: format === 'jpg',
       });
       inferenceInputPath = normalized.path;
       inferenceFormat = 'mp4'; // uridecodebin accepts the temporary Matroska/FFV1 file.
@@ -2265,7 +2266,7 @@ async function runHailoInferenceOnFile({
   }
 }
 
-async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight, timeoutMs }) {
+async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight, timeoutMs, stillImage = false }) {
   const source = await probeVideoGeometry(inputPath, timeoutMs);
   const rotationFilters = ffmpegRotationFilters(source.rotation);
   const sourceWidth = rotationFilters.length ? source.height : source.width;
@@ -2285,14 +2286,21 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
     `pad=${targetWidth}:${targetHeight}:${padX}:${padY}:color=0x727272`,
     'format=rgb24',
   ];
+  // hailonet returns nothing for a single-frame input: the first buffers are consumed
+  // while the network is configured, so a one-frame still reaches hailofilter with
+  // nothing left and the raw meta comes back empty. Stills are therefore repeated
+  // into a short clip. Video inputs keep byte-identical ffmpeg arguments.
+  const stillFrames = 8;
   const args = [
     '-hide_banner',
     '-nostdin',
     '-y',
     '-noautorotate',
+    ...(stillImage ? ['-loop', '1'] : []),
     '-i', inputPath,
     '-map', '0:v:0',
     '-an',
+    ...(stillImage ? ['-frames:v', String(stillFrames), '-r', '10'] : []),
     '-vf', filters.join(','),
     '-c:v', 'ffv1',
     '-pix_fmt', 'rgb24',

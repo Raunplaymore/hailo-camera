@@ -584,6 +584,8 @@ app.post('/api/camera/auto-record/start', async (req, res) => {
   try {
     lastAutoRecordOptions = {
       club: typeof req.body?.club === 'string' ? req.body.club.trim() : null,
+      viewpoint: ['down_the_line', 'face_on'].includes(req.body?.viewpoint) ? req.body.viewpoint : null,
+      handedness: ['right', 'left'].includes(req.body?.handedness) ? req.body.handedness : null,
     };
     const status = await manager.start();
     res.json({ ok: true, status });
@@ -1876,6 +1878,8 @@ async function finalizeAutoRecordMeta(filename) {
     metaPath,
     requireVideo: true,
     club: lastAutoRecordOptions.club,
+    viewpoint: lastAutoRecordOptions.viewpoint,
+    handedness: lastAutoRecordOptions.handedness,
   });
   lastAutoAnalyzeFilename = filename;
   lastAutoAnalyzeMetaPath = metaPath;
@@ -2377,7 +2381,7 @@ function deriveMetaBase(filename) {
 }
 
 // 외부 분석 서비스 호출
-async function triggerAnalyzeRequest({ jobId, filename, metaPath, force, requireVideo, club }) {
+async function triggerAnalyzeRequest({ jobId, filename, metaPath, force, requireVideo, club, viewpoint, handedness }) {
   if (!ANALYZE_URL) {
     if (requireVideo) {
       throw new Error('Analyze service is not configured');
@@ -2399,6 +2403,8 @@ async function triggerAnalyzeRequest({ jobId, filename, metaPath, force, require
     options: {
       force: Boolean(force),
       ...(club ? { club } : {}),
+      ...(viewpoint ? { viewpoint } : {}),
+      ...(handedness ? { handedness } : {}),
     },
   };
   try {

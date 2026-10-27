@@ -337,6 +337,7 @@ function buildGstFileArgs(options) {
 
   return [
     '-e',
+    '-v',
     ...sourceArgs,
     '!',
     'videoconvert',
@@ -351,6 +352,10 @@ function buildGstFileArgs(options) {
     `so-path=${modelOptions.postProcessLib}`,
     `function-name=${modelOptions.postProcessFunc}`,
     ...(postProcessConfig ? [`config-path=${postProcessConfig}`] : []),
+    '!',
+    'identity',
+    'name=source_timeline',
+    'silent=false',
     '!',
     'hailoexportfile',
     `location=${metaPath}`,

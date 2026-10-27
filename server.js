@@ -21,7 +21,7 @@ const {
   parseFramesFromText,
   normalizeFrame,
 } = require('./src/session/tailParser');
-const { normalizeMetaFile } = require('./src/session/metaNormalizer');
+const { normalizeMetaFile, parseSourceTimes } = require('./src/session/metaNormalizer');
 const { SharedPipeline } = require('./src/session/SharedPipeline');
 let AutoRecordManager;
 let RecorderController;
@@ -938,6 +938,7 @@ app.post('/api/camera/capture-and-analyze', async (req, res) => {
       allowedLabels: metaOptions.allowedLabels,
       minConfidenceByLabel: metaOptions.minConfidenceByLabel,
       coordinateTransform: inference.coordinateTransform,
+      sourceTimesMs: inference.sourceTimesMs,
     });
 
     triggerAnalyzeRequest({
@@ -1042,6 +1043,7 @@ app.post('/api/meta/from-file', async (req, res) => {
       allowedLabels: metaOptions.allowedLabels,
       minConfidenceByLabel: metaOptions.minConfidenceByLabel,
       coordinateTransform: inference.coordinateTransform,
+      sourceTimesMs: inference.sourceTimesMs,
     });
     if (debugDetections) {
       await normalizeMetaFile(metaRawPath, debugMetaPath, {
@@ -1053,6 +1055,7 @@ app.post('/api/meta/from-file', async (req, res) => {
         labelMap: metaOptions.labelMap,
         allowedLabels: null,
         coordinateTransform: inference.coordinateTransform,
+        sourceTimesMs: inference.sourceTimesMs,
       });
     }
 
@@ -2264,7 +2267,7 @@ async function runHailoInferenceOnFile({
     logCommand(SESSION_GST_CMD, gstArgs);
     const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
     logOutputs(stdout, stderr);
-    return { coordinateTransform: normalized?.coordinateTransform || null };
+    return { coordinateTransform: normalized?.coordinateTransform || null, sourceTimesMs: parseSourceTimes(stdout) };
   } finally {
     if (normalized?.path) await fsp.unlink(normalized.path).catch(() => {});
   }
@@ -2293,7 +2296,7 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
   // hailonet returns nothing for a single-frame input: the first buffers are consumed
   // while the network is configured, so a one-frame still reaches hailofilter with
   // nothing left and the raw meta comes back empty. Stills are therefore repeated
-  // into a short clip. Video inputs keep byte-identical ffmpeg arguments.
+  // into a short clip. Videos preserve the source cadence and encoder time base.
   const stillFrames = 8;
   const args = [
     '-hide_banner',
@@ -2304,7 +2307,7 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
     '-i', inputPath,
     '-map', '0:v:0',
     '-an',
-    ...(stillImage ? ['-frames:v', String(stillFrames), '-r', '10'] : []),
+    ...(stillImage ? ['-frames:v', String(stillFrames), '-r', '10'] : ['-vsync', '0', '-enc_time_base', '-1']),
     '-vf', filters.join(','),
     '-c:v', 'ffv1',
     '-pix_fmt', 'rgb24',

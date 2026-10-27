@@ -5,6 +5,12 @@ const { parseFramesFromText } = require('./tailParser');
 async function normalizeMetaFile(rawPath, outputPath, options = {}) {
   const raw = await fsp.readFile(rawPath, 'utf8').catch(() => null);
   const frames = raw ? parseFramesFromText(raw) : [];
+  const pts = options.sourceTimesMs;
+  // Only pair timestamps when every exported buffer has an observed PTS.
+  if (Array.isArray(pts) && pts.length === frames.length && pts.every((t, i) =>
+    Number.isFinite(t) && t >= 0 && (i === 0 || t > pts[i - 1]))) {
+    frames.forEach((frame, index) => { frame.sourceTimeMs = pts[index]; });
+  }
   const transformedFrames = applyCoordinateTransform(frames, options.coordinateTransform);
   const mappedFrames = applyLabelMap(
     transformedFrames,
@@ -29,6 +35,9 @@ async function normalizeMetaFile(rawPath, outputPath, options = {}) {
 }
 
 function normalizeFrameTimes(frames, fps, durationMs) {
+  if (frames.length && frames.every((frame) => Number.isFinite(frame.sourceTimeMs))) {
+    return frames.map((frame) => ({ ...frame, sourceTimestampMs: frame.t, t: frame.sourceTimeMs }));
+  }
   const safeFps = toPositiveNumber(fps);
   const safeDurationMs = toPositiveNumber(durationMs);
   const frameTimes = frames.map((frame) => {
@@ -79,6 +88,16 @@ function normalizeFrameTimes(frames, fps, durationMs) {
     ...frame,
     t: frame.t === null ? null : Math.max(0, Number(frame.t) - baseTime),
   }));
+}
+
+// Observe buffers after inference: Hailo can omit the final input buffer.
+function parseSourceTimes(log) {
+  const lines = String(log).split(/\r?\n/).filter((line) =>
+    line.includes('GstIdentity:source_timeline: last-message = chain'));
+  return lines.map((line) => {
+    const match = line.match(/pts: (\d+):(\d+):(\d+\.\d+),/);
+    return match ? (Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000 : null;
+  });
 }
 
 function inferDurationMs(frames, fps) {
@@ -202,6 +221,7 @@ function toPositiveNumber(value) {
 module.exports = {
   normalizeMetaFile,
   normalizeFrameTimes,
+  parseSourceTimes,
   applyCoordinateTransform,
   applyLabelMap,
 };

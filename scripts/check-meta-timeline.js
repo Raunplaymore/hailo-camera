@@ -22,3 +22,27 @@ for (const [frame, expectedTimeMs] of [[34, 1132], [65, 2164], [73, 2431], [77, 
   );
 }
 console.log(`meta timeline check passed (${GOLDEN_JOB})`);
+
+(async () => {
+  const fs = require('node:fs/promises');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { normalizeMetaFile, parseSourceTimes } = require('../src/session/metaNormalizer');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'club-timeline-'));
+  try {
+    const log = [0, 0.017, 0.051].map(t => `/GstPipeline:p/GstIdentity:source_timeline: last-message = chain (pts: 0:00:${t.toFixed(9)}, duration: none)`).join('\n');
+    assert.deepEqual(parseSourceTimes(log), [0, 17, 51]);
+    assert.deepEqual(parseSourceTimes(log + '\n/GstIdentity:source_timeline: last-message = chain (pts: none,)'), [0, 17, 51, null]);
+    const input = path.join(dir, 'raw.json'), output = path.join(dir, 'meta.json');
+    await fs.writeFile(input, JSON.stringify([0, 30, 100].map(t => ({ timestamp: t, detections: [] }))));
+    await normalizeMetaFile(input, output, { fps: 60, sourceTimesMs: [0, 17, 51] });
+    const meta = JSON.parse(await fs.readFile(output));
+    assert.deepEqual(meta.frames.map(f => f.t), [0, 17, 51]);
+    assert.deepEqual(meta.frames.map(f => f.sourceTimestampMs), [0, 30, 100]);
+    for (const invalid of [[0, 17], [0, null, 51], [0, 0, 51]]) {
+      await normalizeMetaFile(input, output, { fps: 60, sourceTimesMs: invalid });
+      assert.ok(JSON.parse(await fs.readFile(output)).frames.every(f => f.sourceTimeMs === undefined));
+    }
+    console.log('source PTS, missing buffer and invalid clock checks passed');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+})().catch(err => { console.error(err); process.exitCode = 1; });

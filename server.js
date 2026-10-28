@@ -22,6 +22,7 @@ const {
   normalizeFrame,
 } = require('./src/session/tailParser');
 const { normalizeMetaFile, parseSourceTimes } = require('./src/session/metaNormalizer');
+const { DRAIN_FRAMES, parseShowInfoTimes, drainTail } = require('./src/session/tailDrain');
 const { SharedPipeline } = require('./src/session/SharedPipeline');
 let AutoRecordManager;
 let RecorderController;
@@ -2241,9 +2242,24 @@ async function runHailoInferenceOnFile({
   durationSec,
 }) {
   const resolvedModelOptions = modelOptions || buildHailoModelOptions(model);
+  const request = { format, inputPath, metaRawPath, model, resolvedModelOptions, durationSec };
+  if (format === 'mp4' && resolvedModelOptions.fileNormalize !== false) {
+    try {
+      return await runHailoFileAttempt(request, true);
+    } catch (error) {
+      if (error.code !== 'TAIL_DRAIN_UNAVAILABLE') throw error;
+      log('Tail drain could not be verified; retrying the original file inference');
+    }
+  }
+  return runHailoFileAttempt(request, false);
+}
+
+async function runHailoFileAttempt({ format, inputPath, metaRawPath, model, resolvedModelOptions, durationSec }, useTailDrain) {
   let normalized = null;
   let inferenceInputPath = inputPath;
   let inferenceFormat = format;
+  const rawPath = useTailDrain ? `${metaRawPath}.drain-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}` : metaRawPath;
+  const trimmedPath = `${rawPath}.trimmed`;
   try {
     if (resolvedModelOptions.fileNormalize !== false) {
       normalized = await normalizeService7FileInput({
@@ -2252,6 +2268,7 @@ async function runHailoInferenceOnFile({
         targetHeight: resolvedModelOptions.inferenceHeight,
         timeoutMs: Math.max(SERVICE7_NORMALIZE_TIMEOUT_MS, computeAnalyzeTimeout(format, durationSec)),
         stillImage: format === 'jpg',
+        useTailDrain,
       });
       inferenceInputPath = normalized.path;
       inferenceFormat = 'mp4'; // uridecodebin accepts the temporary Matroska/FFV1 file.
@@ -2259,7 +2276,7 @@ async function runHailoInferenceOnFile({
     const gstArgs = buildGstFileArgs({
       format: inferenceFormat,
       inputPath: inferenceInputPath,
-      metaPath: metaRawPath,
+      metaPath: rawPath,
       model,
       modelOptions: resolvedModelOptions,
     });
@@ -2267,13 +2284,31 @@ async function runHailoInferenceOnFile({
     logCommand(SESSION_GST_CMD, gstArgs);
     const { stdout, stderr } = await runCommand(SESSION_GST_CMD, gstArgs, timeoutMs);
     logOutputs(stdout, stderr);
-    return { coordinateTransform: normalized?.coordinateTransform || null, sourceTimesMs: parseSourceTimes(stdout) };
+    let sourceTimesMs = parseSourceTimes(stdout);
+    if (useTailDrain) {
+      const raw = await fsp.readFile(rawPath, 'utf8').catch(() => '');
+      const drained = parseFramesFromText(raw).length === sourceTimesMs.length
+        ? drainTail(raw, sourceTimesMs, normalized?.inputTimesMs, normalized?.paddedTimesMs) : null;
+      if (!drained) {
+        const error = new Error('Tail output cannot be matched to source frames');
+        error.code = 'TAIL_DRAIN_UNAVAILABLE';
+        throw error;
+      }
+      await fsp.writeFile(trimmedPath, JSON.stringify(drained.records));
+      await fsp.rename(trimmedPath, metaRawPath);
+      sourceTimesMs = drained.sourceTimesMs;
+    }
+    return { coordinateTransform: normalized?.coordinateTransform || null, sourceTimesMs };
   } finally {
     if (normalized?.path) await fsp.unlink(normalized.path).catch(() => {});
+    if (useTailDrain) {
+      await fsp.unlink(rawPath).catch(() => {});
+      await fsp.unlink(trimmedPath).catch(() => {});
+    }
   }
 }
 
-async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight, timeoutMs, stillImage = false }) {
+async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight, timeoutMs, stillImage = false, useTailDrain = false }) {
   const source = await probeVideoGeometry(inputPath, timeoutMs);
   const rotationFilters = ffmpegRotationFilters(source.rotation);
   const sourceWidth = rotationFilters.length ? source.height : source.width;
@@ -2292,6 +2327,7 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
     `scale=${scaledWidth}:${scaledHeight}:flags=bilinear`,
     `pad=${targetWidth}:${targetHeight}:${padX}:${padY}:color=0x727272`,
     'format=rgb24',
+    ...(useTailDrain ? ['showinfo@tail_input=checksum=0', `tpad=stop_mode=clone:stop=${DRAIN_FRAMES}`, 'showinfo@tail_output=checksum=0'] : []),
   ];
   // hailonet returns nothing for a single-frame input: the first buffers are consumed
   // while the network is configured, so a one-frame still reaches hailofilter with
@@ -2316,9 +2352,18 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
   logCommand(SERVICE7_FFMPEG_CMD, args);
   try {
     const { stdout, stderr } = await runCommand(SERVICE7_FFMPEG_CMD, args, timeoutMs);
-    logOutputs(stdout, stderr);
+    logOutputs(stdout, useTailDrain ? stderr.split(/\r?\n/).filter((line) => !line.includes('showinfo@tail_')).join('\n') : stderr);
+    const inputTimesMs = useTailDrain ? parseShowInfoTimes(stderr, 'tail_input') : null;
+    const paddedTimesMs = useTailDrain ? parseShowInfoTimes(stderr, 'tail_output') : null;
+    if (useTailDrain && (!inputTimesMs || !paddedTimesMs)) {
+      const error = new Error('Tail input timestamps unavailable');
+      error.code = 'TAIL_DRAIN_UNAVAILABLE';
+      throw error;
+    }
     return {
       path: normalizedPath,
+      inputTimesMs,
+      paddedTimesMs,
       coordinateTransform: {
         sourceWidth,
         sourceHeight,
@@ -2331,6 +2376,7 @@ async function normalizeService7FileInput({ inputPath, targetWidth, targetHeight
     };
   } catch (err) {
     await fsp.unlink(normalizedPath).catch(() => {});
+    if (useTailDrain && err.code !== 'TIMEOUT') err.code = 'TAIL_DRAIN_UNAVAILABLE';
     throw err;
   }
 }

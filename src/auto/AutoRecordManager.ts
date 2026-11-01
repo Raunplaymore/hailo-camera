@@ -42,6 +42,8 @@ export class AutoRecordManager {
   private pauseDetectorDuringRecording = false;
   private detectorPaused = false;
   private onStateChange?: AutoRecordManagerOptions['onStateChange'];
+  private detectorStarting: Promise<void> | null = null;
+  private recorderStarting: Promise<void> | null = null;
 
   constructor(options: AutoRecordManagerOptions) {
     this.recorder = options.recorder;
@@ -64,19 +66,30 @@ export class AutoRecordManager {
     }
     this.clearTimers();
     this.detectorPaused = false;
-    await this.detector.start();
     this.lastError = null;
     this.startedAt = new Date().toISOString();
     this.recordingFilename = null;
     this.lastRecordingFilename = null;
     this.resetDetectionState();
     this.transitionTo('arming');
+    const starting = Promise.resolve().then(() => this.detector.start());
+    this.detectorStarting = starting;
+    try {
+      await starting;
+    } catch (err) {
+      this.fail(err as Error);
+      throw err;
+    } finally {
+      if (this.detectorStarting === starting) this.detectorStarting = null;
+    }
     this.startPolling();
     return this.getStatus();
   }
 
   async stop(reason = 'user'): Promise<AutoRecordStatus> {
     this.log('AutoRecord stop requested', reason);
+    if (this.detectorStarting) await this.detectorStarting.catch(() => undefined);
+    if (this.recorderStarting) await this.recorderStarting;
     this.clearTimers();
     if (this.state === 'recording' || this.state === 'finishLocked' || this.state === 'stopping') {
       try {
@@ -120,7 +133,11 @@ export class AutoRecordManager {
   private enterAddressLocked() {
     if (this.state !== 'arming') return;
     this.transitionTo('addressLocked');
-    this.transitionToRecording().catch((err) => this.fail(err));
+    const starting = this.transitionToRecording();
+    this.recorderStarting = starting;
+    starting.finally(() => {
+      if (this.recorderStarting === starting) this.recorderStarting = null;
+    }).catch((err) => this.fail(err));
   }
 
   private async transitionToRecording() {

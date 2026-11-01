@@ -39,7 +39,45 @@ async function checkUnexpectedExitIsPreserved() {
   assert.equal(status.lastError, 'recorder exited');
 }
 
-Promise.all([checkStopFailureIsPreserved(), checkUnexpectedExitIsPreserved()])
+async function checkStopDuringStart() {
+  let finishStart;
+  let detectorRunning = false;
+  const slowDetector = {
+    start: () => new Promise((resolve) => { finishStart = () => { detectorRunning = true; resolve(); }; }),
+    stop: async () => { detectorRunning = false; },
+    getLatestFrame: async () => null,
+  };
+  const recorder = { startRecording: async () => ({ filename: 'test.mp4' }), stopRecording: async () => ({ filename: 'test.mp4' }), isRecording: () => false };
+  const manager = new AutoRecordManager({ recorder, detector: slowDetector });
+  const starting = manager.start();
+  await Promise.resolve();
+  assert.equal(manager.getStatus().state, 'arming');
+  await assert.rejects(manager.start(), /already running/);
+  const stopping = manager.stop();
+  finishStart();
+  await starting;
+  assert.equal((await stopping).state, 'idle');
+  assert.equal(detectorRunning, false);
+}
+
+async function checkStopDuringRecorderStart() {
+  let finishStart;
+  let recording = false;
+  const recorder = {
+    startRecording: () => new Promise((resolve) => { finishStart = () => { recording = true; resolve({ filename: 'test.mp4' }); }; }),
+    stopRecording: async () => { recording = false; return { filename: 'test.mp4' }; },
+    isRecording: () => recording,
+  };
+  const manager = new AutoRecordManager({ recorder, detector });
+  await manager.start();
+  manager.enterAddressLocked();
+  const stopping = manager.stop();
+  finishStart();
+  assert.equal((await stopping).state, 'idle');
+  assert.equal(recording, false);
+}
+
+Promise.all([checkStopFailureIsPreserved(), checkUnexpectedExitIsPreserved(), checkStopDuringStart(), checkStopDuringRecorderStart()])
   .then(() => console.log('auto-record failure regression checks passed'))
   .catch((error) => {
     console.error(error);

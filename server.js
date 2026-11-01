@@ -1996,19 +1996,19 @@ async function deleteSessionArtifacts(jobId) {
       metaPath = parsed.metaPath;
       metaRawPath = `${parsed.metaPath}.raw`;
     }
-  } catch (_) {
-    // fall back to defaults
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
   }
   const uploadPath = path.join(UPLOAD_DIR, videoFile);
   const uploadPartPath = `${uploadPath}.part`;
   const deleted = { videoFile, metaPath };
-  await Promise.all([
-    fsp.unlink(uploadPath).catch(() => undefined),
-    fsp.unlink(uploadPartPath).catch(() => undefined),
-    fsp.unlink(metaPath).catch(() => undefined),
-    fsp.unlink(metaRawPath).catch(() => undefined),
-    fsp.unlink(statePath).catch(() => undefined),
-  ]);
+  for (const file of [uploadPath, uploadPartPath, metaPath, metaRawPath, statePath]) {
+    try {
+      await fsp.unlink(file);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }
   return deleted;
 }
 
